@@ -15,33 +15,23 @@ const
   FX_MAX_PARTICLES = 12000;
   FX_MAX_PIXELS = 16777216;
   FX_STYLE_COUNT = 12;
-  FX_PRESET_COUNT = 21;
-
-type
-  TFXPresetInfo = record
-    ID: Integer;
-    Name: PWideChar;
-  end;
-
-const
-  // 削除した16・17を詰めず、残るプリセットの識別値を維持する。
-  FX_PRESETS: array[0..FX_PRESET_COUNT - 1] of TFXPresetInfo = (
-    (ID: 0; Name: '標準'), (ID: 1; Name: '小雨・少量'),
-    (ID: 2; Name: '豪雨・大量'), (ID: 3; Name: '横殴り・横風'),
-    (ID: 4; Name: '暴風雨・吹雪'), (ID: 5; Name: '嵐・猛吹雪'),
-    (ID: 6; Name: '霧雨・粉雪'), (ID: 7; Name: '牡丹雪'),
-    (ID: 8; Name: '風に流される'), (ID: 9; Name: '舞い上がる'),
-    (ID: 10; Name: '渦巻き・竜巻'), (ID: 11; Name: 'バケツ'),
-    (ID: 12; Name: '強い水流'), (ID: 13; Name: 'シャワー'),
-    (ID: 14; Name: '間欠噴出'), (ID: 15; Name: '連続噴射'),
-    (ID: 18; Name: '爆発'), (ID: 19; Name: '砂嵐'),
-    (ID: 20; Name: 'スライム'), (ID: 21; Name: 'さらさら'),
-    (ID: 22; Name: 'ねばねば'));
 
 type
   TFXStyle = (fsRain, fsSnow, fsWater, fsPetal, fsLeaf, fsConfetti,
     fsSand, fsHail, fsFountain, fsSpark, fsInk, fsSlime);
   TFXEmission = (feContinuous, feShot, feExplosion, feJet);
+  TFXMaterial = (fmWater, fmSnow, fmSand, fmPetal, fmLeaf, fmConfetti,
+    fmHail, fmLight, fmInk, fmSlime);
+  TFXMotion = (fxmNormal, fxmWind, fxmStorm, fxmVortex, fxmWeightless);
+
+const
+  FX_MATERIAL_NAMES: array[TFXMaterial] of PWideChar = ('水', '雪', '砂',
+    '花びら', '落ち葉', '紙吹雪', 'ひょう', '光', 'インク', 'スライム');
+  FX_SOURCE_NAMES: array[0..3] of PWideChar = ('広範囲', '一斉発射', '連続噴出', '爆発');
+  FX_SOURCE_VALUES: array[0..3] of TFXEmission = (feContinuous, feShot, feJet, feExplosion);
+  FX_MOTION_NAMES: array[TFXMotion] of PWideChar = ('通常', '横風', '強風', '渦', '無重力');
+
+type
   TFXShape = (shDrop, shSnow, shPetal, shLeaf, shPaper, shGrain,
     shHail, shLight, shInk, shSlime);
   TFXVec = record
@@ -121,13 +111,15 @@ function FXRandom(Index: Int64; Seed, Channel: Cardinal): Double;
 function FXNoise(Position: Double; Seed: Cardinal): Double;
 function FXProfile(Style: TFXStyle): TFXProfile;
 function FXDefaultSettings(Style: TFXStyle): TFXSettings;
+// 素材・発生・動きの順に基準値を組み立てる。現在の描画設定や乱数状態を変更しない。
+// 戻り値は設定ボタンで標準項目へ反映し、毎フレームの描画には直接重ねない。
+function FXComposeSettings(Material: TFXMaterial; Emission: TFXEmission;
+  Motion: TFXMotion): TFXSettings;
 // 速度・重力・画像サイズから予備動作を求め、開始状態の割合を適用する。
 // 時間補正や風の時刻を変更せず、発生時刻より前の計算量だけを返す。
 function FXStartupTiming(const S: TFXSettings; Width, Height: Integer): TFXStartupTiming;
 // 静的な蓄積の開始進行。100では従来の蓄積量をそのまま使用する。
 function FXStartupAccumulation(Time: Double; const S: TFXSettings; Width, Height: Integer): Double;
-// 素材固有のプリセットはスタイルも切り替え、基準値を返す。外部の値は変更しない。
-function FXPresetSettings(Style: TFXStyle; Preset: Integer): TFXSettings;
 function FXStyleName(Style: TFXStyle): string;
 function FXParticleColor(const S: TFXSettings; Index: Int64): Cardinal;
 
@@ -297,6 +289,63 @@ begin
   Result.InitialState := 100;
 end;
 
+function FXComposeSettings(Material: TFXMaterial; Emission: TFXEmission;
+  Motion: TFXMotion): TFXSettings;
+const
+  Styles: array[TFXMaterial] of TFXStyle = (fsRain, fsSnow, fsSand, fsPetal,
+    fsLeaf, fsConfetti, fsHail, fsSpark, fsInk, fsSlime);
+var
+  Style: TFXStyle;
+begin
+  Style := Styles[Material];
+  if Material = fmWater then
+    case Emission of
+      feShot, feExplosion: Style := fsWater;
+      feJet: Style := fsFountain;
+    end;
+  Result := FXDefaultSettings(Style);
+  Result.Emission := Emission;
+  Result.Duration := 0; Result.Period := 0; Result.Prewarm := 0;
+  case Emission of
+    feContinuous: begin
+      Result.Angle := 0; Result.DirectionSpread := 10;
+      Result.AutomaticEmitter := True;
+    end;
+    feShot: begin
+      Result.Angle := 90; Result.DirectionSpread := 38;
+      Result.Speed := Max(240.0, Result.Speed);
+      Result.AutomaticEmitter := False; Result.EmitterRange := 0;
+    end;
+    feJet: begin
+      Result.Angle := 180; Result.DirectionSpread := 25;
+      Result.Speed := Max(240.0, Result.Speed);
+      Result.AutomaticEmitter := False; Result.EmitterRange := 0;
+    end;
+    feExplosion: begin
+      Result.Angle := 0; Result.DirectionSpread := 360; Result.Burst := 750;
+      Result.Speed := Max(180.0, Result.Speed * 1.5);
+      Result.AutomaticEmitter := False; Result.EmitterRange := 0;
+    end;
+  end;
+  case Motion of
+    fxmWind: begin
+      Result.Wind := 110;
+      if Emission = feContinuous then Result.Angle := 45;
+    end;
+    fxmStorm: begin
+      Result.Wind := 280; Result.Gust := 100; Result.Turbulence := 35;
+      // 横風だけを加えると上部で画面外へ出るため、側面からも流入させる。
+      if Emission = feContinuous then Result.Angle := 70;
+    end;
+    fxmVortex: begin
+      Result.Vortex := 95; Result.Wind := 40; Result.Turbulence := 20;
+    end;
+    fxmWeightless: begin
+      Result.Gravity := 0; Result.Drag := 0; Result.Sway := 0;
+    end;
+  end;
+end;
+
 function FXStartupTiming(const S: TFXSettings; Width, Height: Integer): TFXStartupTiming;
 var
   D: TFXVec;
@@ -348,53 +397,6 @@ begin
   Timing := FXStartupTiming(S, Width, Height);
   Result := EnsureRange(EnsureRange(S.InitialState, 0.0, 100.0) / 100 +
     (Time - S.StartTime) / Timing.RampTime, 0.0, 1.0);
-end;
-
-function FXPresetSettings(Style: TFXStyle; Preset: Integer): TFXSettings;
-begin
-  // 素材を指定する名前では、直前のスタイルに依存せず同じ素材を選ぶ。
-  // 量・風などの共通プリセットは、現在の素材を引き継ぐ。
-  case Preset of
-    7: Style := fsSnow;
-    11, 12: Style := fsWater;
-    13..15: Style := fsFountain;
-    18: Style := fsSpark;
-    19: Style := fsSand;
-    20..22: Style := fsSlime;
-  end;
-  Result := FXDefaultSettings(Style);
-  // ボタン適用・実験用の値を生成する。毎フレームの描画設定へ重ねて適用しない。
-  case Preset of
-    1: begin Result.Rate := Result.Rate * 0.35; Result.Burst := 150; end;
-    2: begin Result.Rate := Result.Rate * 3; Result.Burst := 1200; end;
-    3: begin Result.Wind := 160; Result.Angle := Result.Angle + 30; end;
-    4: begin Result.Rate := Result.Rate * 2; Result.Wind := 280; Result.Gust := 100; end;
-    5: begin Result.Rate := Result.Rate * 4; Result.Wind := 500; Result.Gust := 220; Result.Turbulence := 35; end;
-    6: begin Result.Size := Result.Size * 0.5; Result.Speed := Result.Speed * 0.65; end;
-    7: begin Result.Size := Result.Size * 2.2; Result.Speed := Result.Speed * 0.75; end;
-    8: begin
-      Result.Wind := 110;
-      // 揺れる素材は風に舞わせ、雨や水流などの直進する素材は形を保つ。
-      if Result.Sway > 0 then Result.Sway := Result.Sway + 25;
-    end;
-    9: begin Result.Angle := 180; Result.Gravity := Result.Gravity * 0.25; Result.Wind := 60; end;
-    10: begin Result.Vortex := 95; Result.Wind := 40; Result.Turbulence := 20; end;
-    11: begin Result.Emission := feShot; Result.Burst := 1300; Result.Size := Result.Size * 1.5; end;
-    12: begin Result.Speed := Result.Speed * 1.7; Result.DirectionSpread := 12; Result.Burst := 1400; end;
-    13: begin Result.Emission := feJet; Result.Rate := Result.Rate * 1.6; Result.DirectionSpread := 55; end;
-    14: begin Result.Emission := feJet; Result.Duration := 1.5; Result.Period := 3; end;
-    15: begin Result.Emission := feJet; Result.Rate := Result.Rate * 2; Result.DirectionSpread := 15; end;
-    18: begin
-      Result.Emission := feExplosion; Result.DirectionSpread := 360;
-      Result.Burst := 750; Result.Speed := Result.Speed * 2; Result.Glow := 0.7;
-    end;
-    19: begin Result.Angle := 90; Result.Gravity := 0; Result.Wind := 220;
-      Result.Rate := Result.Rate * 3; Result.Turbulence := 30; end;
-    21: begin Result.Viscosity := 0.12; Result.Cohesion := 0.35;
-      Result.Adhesion := 0.3; Result.DripTime := 0.35; Result.Speed := 220; end;
-    22: begin Result.Viscosity := 0.95; Result.Cohesion := 0.95;
-      Result.Adhesion := 0.95; Result.DripTime := 2.4; Result.Drag := 1.2; end;
-  end;
 end;
 
 function FXStyleName(Style: TFXStyle): string;

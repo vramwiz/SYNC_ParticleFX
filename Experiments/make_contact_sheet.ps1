@@ -1,11 +1,12 @@
-﻿param([string]$PreviewDirectory, [switch]$StartupOnly)
+﻿param([string]$PreviewDirectory, [switch]$StartupOnly, [switch]$CompositionOnly)
 
 # 実験出力の透過PNGを市松模様へ重ね、目視確認用の一覧を作る。
 $ErrorActionPreference = 'Stop'
+if ($StartupOnly -and $CompositionOnly) { throw 'Choose one sheet type at a time.' }
 if (-not $PreviewDirectory) { $PreviewDirectory = Join-Path $PSScriptRoot '..\Win64\Experiment\Preview' }
 Add-Type -AssemblyName System.Drawing
 $files = @(Get-ChildItem -LiteralPath $PreviewDirectory -Filter '*.png' -File |
-    Where-Object Name -notin @('contact_sheet.png', 'startup_state.png') | Sort-Object Name)
+    Where-Object Name -notin @('contact_sheet.png', 'startup_state.png', 'combinations.png') | Sort-Object Name)
 if ($StartupOnly) {
     $files = @(foreach ($kind in @('rain', 'snow', 'slime')) {
         foreach ($state in @(0, 50, 100)) {
@@ -13,9 +14,16 @@ if ($StartupOnly) {
         }
     })
 }
+if ($CompositionOnly) {
+    $files = @(foreach ($name in @('snow_normal', 'snow_wind', 'snow_storm',
+        'water_rain', 'water_shot', 'water_fountain', 'petal_vortex',
+        'light_explosion', 'slime_weightless')) {
+        Get-Item -LiteralPath (Join-Path $PreviewDirectory ('compose_{0}.png' -f $name))
+    })
+}
 $tileWidth = 400
 $tileHeight = 225
-if ($StartupOnly) { $tileWidth = 320; $tileHeight = 180 }
+if ($StartupOnly -or $CompositionOnly) { $tileWidth = 320; $tileHeight = 180 }
 $headerHeight = 28
 $gap = 12
 $columns = 3
@@ -44,6 +52,7 @@ try {
     }
     $outputName = 'contact_sheet.png'
     if ($StartupOnly) { $outputName = 'startup_state.png' }
+    if ($CompositionOnly) { $outputName = 'combinations.png' }
     $outputPath = Join-Path $PreviewDirectory $outputName
     $sheet.Save($outputPath, [Drawing.Imaging.ImageFormat]::Png)
     Write-Output ([IO.Path]::GetFullPath($outputPath))

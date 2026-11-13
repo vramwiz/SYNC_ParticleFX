@@ -522,79 +522,128 @@ begin
   end;
 end;
 
-procedure PresetChecks;
+procedure CompositionChecks;
+const
+  W = 320; H = 180;
 var
-  Environment: TFXEnvironment;
-  Simulator: TFXSimulator;
-  Visuals: TFXVisualList;
-  S: TFXSettings;
-  Preset, I, J: Integer;
+  R, Cold: TFXRenderer;
+  Env: TFXEnvironment;
+  Sim: TFXSimulator;
+  V: TFXVisualList;
+  Blank, Pixels, Saved, Other: TFXPixels;
+  S, Base, Rebuilt: TFXSettings;
+  Material: TFXMaterial;
+  Emission: TFXEmission;
+  Motion: TFXMotion;
+  I, J, LowerArea: Integer;
+  Time: Double;
   Valid: Boolean;
-  Style: TFXStyle;
-  Base: TFXSettings;
-  R: TFXRenderer;
-  Pixels: TFXPixels;
+
+  procedure Preview(const Name: string; M: TFXMaterial; E: TFXEmission;
+    Movement: TFXMotion; T: Double);
+  begin
+    S := FXComposeSettings(M, E, Movement);
+    R.Render(Blank, W, H, T, S, Pixels);
+    SavePNG('compose_' + Name, Pixels, W, H);
+  end;
+
 begin
-  Valid := Length(FX_PRESETS) = FX_PRESET_COUNT;
-  for I := Low(FX_PRESETS) to High(FX_PRESETS) do
-  begin
-    Valid := Valid and (FX_PRESETS[I].Name <> nil) and not (FX_PRESETS[I].ID in [16, 17]);
-    for J := Low(FX_PRESETS) to I - 1 do
-      Valid := Valid and (FX_PRESETS[I].ID <> FX_PRESETS[J].ID) and
-        (string(FX_PRESETS[I].Name) <> string(FX_PRESETS[J].Name));
-  end;
-  Check(Valid, 'preset catalog contains unique names and stable IDs without weightless or radial-only entries');
-  // どの素材から適用しても、牡丹雪は雪の形・速さ・色を一式選ぶ。
-  Base := FXDefaultSettings(fsSnow);
-  Valid := True;
-  for Style := Low(TFXStyle) to High(TFXStyle) do
-  begin
-    S := FXPresetSettings(Style, 7);
-    Valid := Valid and (S.Style = fsSnow) and (S.Shape = shSnow) and
-      (S.Emission = feContinuous) and (S.Color = Base.Color) and
-      SameValue(S.Size, Base.Size * 2.2) and SameValue(S.Speed, Base.Speed * 0.75);
-  end;
-  Check(Valid, 'large-snow preset selects snow material and its full profile from all twelve styles');
-  S := FXPresetSettings(fsRain, 11);
-  Check((S.Style = fsWater) and (S.Emission = feShot), 'bucket preset selects water and a single shot');
-  S := FXPresetSettings(fsRain, 12);
-  Check((S.Style = fsWater) and (S.Emission = feShot), 'water-stream preset selects water and its shot profile');
-  S := FXPresetSettings(fsInk, 14);
-  Check((S.Style = fsFountain) and (S.Emission = feJet) and (S.Angle = 180),
-    'intermittent-jet preset selects the fountain material and upward direction');
-  S := FXPresetSettings(fsSnow, 18);
-  Check((S.Style = fsSpark) and (S.Shape = shLight) and (S.Emission = feExplosion),
-    'explosion preset selects light particles and radial emission');
-  S := FXPresetSettings(fsWater, 19);
-  Check((S.Style = fsSand) and (S.Shape = shGrain), 'sandstorm preset selects sand material');
-  Valid := True;
-  for Style := Low(TFXStyle) to High(TFXStyle) do
-  begin
-    S := FXPresetSettings(Style, 0);
-    Valid := Valid and (S.Style = Style);
-  end;
-  Check(Valid, 'standard preset preserves the selected material');
-  Environment := TFXEnvironment.Create;
-  Simulator := TFXSimulator.Create;
-  Visuals := TFXVisualList.Create;
-  R := TFXRenderer.Create;
+  R := TFXRenderer.Create; Cold := TFXRenderer.Create;
+  Env := TFXEnvironment.Create; Sim := TFXSimulator.Create; V := TFXVisualList.Create;
   try
-    for J := Low(FX_PRESETS) to High(FX_PRESETS) do
+    SetLength(Blank, W * H);
+    Valid := True;
+    for I := Low(FX_SOURCE_VALUES) to High(FX_SOURCE_VALUES) do
+      for J := Low(FX_SOURCE_VALUES) to I - 1 do
+        Valid := Valid and (FX_SOURCE_VALUES[I] <> FX_SOURCE_VALUES[J]);
+    Check(Valid and (FX_SOURCE_VALUES[2] = feJet) and (FX_SOURCE_VALUES[3] = feExplosion),
+      'source list maps named choices to emission values without assuming array indices');
+
+    for Material := Low(TFXMaterial) to High(TFXMaterial) do
+      for Emission := Low(TFXEmission) to High(TFXEmission) do
+      begin
+        Base := FXComposeSettings(Material, Emission, fxmNormal);
+        for Motion := Low(TFXMotion) to High(TFXMotion) do
+        begin
+          S := FXComposeSettings(Material, Emission, Motion);
+          Time := 0.2;
+          if Emission = feContinuous then Time := 0.5;
+          R.Render(Blank, W, H, Time, S, Pixels);
+          Env.Prepare(Blank, W, H, S, Time);
+          Sim.Generate(Time, S, Env, V);
+          Valid := (CountAlpha(Pixels) > 0) and (V.Count > 0) and
+            (V.Count <= FX_MAX_PARTICLES * 6) and (S.Emission = Emission) and
+            (S.Style = Base.Style) and (S.Shape = Base.Shape) and (S.Color = Base.Color);
+          for I := 0 to V.Count - 1 do
+            Valid := Valid and not IsNan(V[I].Position.X) and not IsInfinite(V[I].Position.Y) and
+              (V[I].Opacity > 0) and (V[I].Opacity <= 1);
+          if Motion = fxmWeightless then
+            Valid := Valid and (S.Gravity = 0) and (S.Drag = 0) and (S.Sway = 0);
+          Check(Valid, Format('composition material=%d emission=%d motion=%d renders visible pixels and preserves its material',
+            [Ord(Material), Ord(Emission), Ord(Motion)]));
+        end;
+      end;
+    Check(CountAlpha(Blank) = 0, 'all compositions preserve the transparent input');
+
+    for Motion := fxmWind to fxmStorm do
     begin
-      Preset := FX_PRESETS[J].ID;
-      S := FXPresetSettings(fsSnow, Preset);
-      Environment.Prepare(Empty, WIDTH, HEIGHT, S, 0.5);
-      Simulator.Generate(0.5, S, Environment, Visuals);
-      Valid := (Visuals.Count > 0) and (Visuals.Count <= FX_MAX_PARTICLES * 6);
-      for I := 0 to Visuals.Count - 1 do
-        Valid := Valid and not IsNan(Visuals[I].Position.X) and not IsInfinite(Visuals[I].Position.Y) and
-          (Visuals[I].Opacity >= 0) and (Visuals[I].Opacity <= 1) and (Visuals[I].Size > 0);
-      R.Render(Empty, WIDTH, HEIGHT, 0.5, S, Pixels);
-      Check(Valid and (CountAlpha(Pixels) > 0),
-        Format('preset %d renders visible pixels with finite and bounded particles without a host', [Preset]));
+      S := FXComposeSettings(fmSnow, feContinuous, Motion);
+      R.Render(Blank, W, H, 0.5, S, Pixels);
+      LowerArea := 0;
+      for I := W * (H * 2 div 3) to High(Pixels) do
+        if Pixels[I].A > 16 then Inc(LowerArea);
+      Check(LowerArea > 100,
+        Format('windy snow motion %d reaches the lower canvas instead of leaving only an upper strip', [Ord(Motion)]));
     end;
+
+    S := FXComposeSettings(fmWater, feContinuous, fxmNormal);
+    Check((S.Style = fsRain) and (S.Angle = 0) and S.AutomaticEmitter,
+      'water over a wide area selects the existing downward rain profile');
+    S := FXComposeSettings(fmWater, feShot, fxmNormal);
+    Check((S.Style = fsWater) and (S.Angle = 90) and not S.AutomaticEmitter,
+      'a water shot starts at the chosen point and travels right');
+    S := FXComposeSettings(fmWater, feJet, fxmNormal);
+    Check((S.Style = fsFountain) and (S.Angle = 180) and (S.Gravity > 0) and not S.AutomaticEmitter,
+      'continuous water emission selects an upward fountain with downward gravity');
+
+    S := FXComposeSettings(fmSnow, feContinuous, fxmStorm);
+    R.Render(Blank, W, H, 0.7345, S, Saved);
+    R.Render(Blank, W, H, 1.5, S, Pixels);
+    R.Render(Blank, W, H, 0.7345, S, Other);
+    Valid := EqualPixels(Saved, Other);
+    Cold.Render(Blank, W, H, 0.7345, S, Other);
+    Check(Valid and EqualPixels(Saved, Other), 'composed storm motion reproduces fractional reverse seek and a cold cache');
+    S := FXComposeSettings(fmSnow, feContinuous, fxmNormal);
+    R.Render(Blank, W, H, 0.7345, S, Saved);
+    S := FXComposeSettings(fmSnow, feContinuous, fxmVortex);
+    R.Render(Blank, W, H, 0.7345, S, Pixels);
+    Rebuilt := FXComposeSettings(fmSnow, feContinuous, fxmNormal);
+    Cold.Render(Blank, W, H, 0.7345, Rebuilt, Other);
+    Check(EqualPixels(Saved, Other) and (Rebuilt.Vortex = 0) and (Rebuilt.Wind = 0) and
+      (Rebuilt.Gust = 0) and (Rebuilt.Turbulence = 0),
+      'rebuilding normal motion clears previous wind and vortex settings');
+
+    S := FXComposeSettings(fmSnow, feShot, fxmNormal); S.StartTime := 2;
+    R.Render(Blank, W, H, 1.9, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'composed single shots remain absent before their start time');
+    R.Render(Blank, W, H, 40, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'composed single shots expire without leaving old particles');
+    S := FXComposeSettings(fmWater, feContinuous, fxmNormal);
+    S.InitialState := 0;
+    R.Render(Blank, W, H, 0, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'composed continuous emission still honors an empty initial state');
+
+    Preview('snow_normal', fmSnow, feContinuous, fxmNormal, 0.5);
+    Preview('snow_wind', fmSnow, feContinuous, fxmWind, 0.5);
+    Preview('snow_storm', fmSnow, feContinuous, fxmStorm, 0.5);
+    Preview('water_rain', fmWater, feContinuous, fxmNormal, 0.5);
+    Preview('water_shot', fmWater, feShot, fxmNormal, 0.2);
+    Preview('water_fountain', fmWater, feJet, fxmNormal, 0.5);
+    Preview('petal_vortex', fmPetal, feContinuous, fxmVortex, 0.5);
+    Preview('light_explosion', fmLight, feExplosion, fxmNormal, 0.2);
+    Preview('slime_weightless', fmSlime, feJet, fxmWeightless, 0.5);
   finally
-    R.Free; Visuals.Free; Simulator.Free; Environment.Free;
+    V.Free; Sim.Free; Env.Free; Cold.Free; R.Free;
   end;
 end;
 
@@ -764,14 +813,6 @@ begin
     Check(CountAlpha(Pixels) = 0, 'expired slime shots leave no static accumulation behind');
     S.StartTime := 2; R.Render(Blank, W, H, 1, S, Pixels);
     Check(CountAlpha(Pixels) = 0, 'slime shots are absent before their start time');
-    for K := 20 to 22 do
-    begin
-      S := FXPresetSettings(fsRain, K);
-      R.Render(Blank, W, H, 0.7, S, Pixels);
-      Check((S.Style = fsSlime) and (CountAlpha(Pixels) > 0),
-        Format('preset %d selects slime and renders visible particles', [K]));
-    end;
-
     // 人物・斜面・段差にも同じソルバーを使う。
     S := FXDefaultSettings(fsSlime); S.BottomMargin := 100; S.AccumAmount := 65;
     R.Render(Source, WIDTH, HEIGHT, 3, S, Pixels);
@@ -1199,14 +1240,16 @@ begin
   RenderExample('10_confetti', 3, Empty);
   Settings := FXDefaultSettings(fsSpark);
   RenderExample('11_explosion', 0.6, Empty);
-  Settings := FXPresetSettings(fsSand, 19);
+  Settings := FXDefaultSettings(fsSand); Settings.Angle := 90;
+  Settings.Gravity := 0; Settings.Wind := 220; Settings.Rate := Settings.Rate * 3; Settings.Turbulence := 30;
   RenderExample('12_sandstorm', 3, Source);
   Settings := FXDefaultSettings(fsHail);
   RenderExample('13_hail', 2, Source);
   Settings := FXDefaultSettings(fsInk); Settings.AutomaticEmitter := False;
   Settings.EmitterX := -420; Settings.EmitterY := -120;
   RenderExample('14_ink', 0.7, Source);
-  Settings := FXPresetSettings(fsSnow, 4); Settings.AccumAmount := 65;
+  Settings := FXDefaultSettings(fsSnow); Settings.Rate := Settings.Rate * 2;
+  Settings.Wind := 280; Settings.Gust := 100; Settings.AccumAmount := 65;
   RenderExample('15_blizzard', 3, Source);
   Settings := FXDefaultSettings(fsPetal); Settings.Vortex := 130;
   Settings.Emission := feExplosion; Settings.Gravity := 0; Settings.Speed := 180;
@@ -1259,7 +1302,7 @@ begin
   MotionChecks;
   AlphaAndCacheChecks;
   FullHDChecks;
-  PresetChecks;
+  CompositionChecks;
   SlimeChecks;
   SlimeMotionChecks;
   StartupStateChecks;

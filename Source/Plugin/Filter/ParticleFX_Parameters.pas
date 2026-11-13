@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // AviUtl2標準項目を登録し、現在の項目値から描画設定を取り出す。
-// プリセットは適用ボタンで対象エフェクトの標準項目へ一度だけ書き込む。
+// 素材・発生・動きは設定ボタンで対象エフェクトの標準項目へ一度だけ書き込む。
 
 interface
 
@@ -31,20 +31,20 @@ type
     trSlide, trAccumAmount, trThickness, trRoughness, trSlope, trAccumOpacity,
     trMelt, trFloor, trBlur, trMotionBlur, trGlow, trDepth, trWidth, trHeight,
     trPrewarm, trViscosity, trCohesion, trAdhesion, trDripTime, trMargin, trInitialState);
-  TSelect = (slStyle, slPreset, slEmission, slResponse, slAccumShape, slDrawMode);
+  TSelect = (slStyle, slMaterial, slSource, slMotion, slEmission, slResponse, slAccumShape, slDrawMode);
   TCheck = (ckCollision, ckAccumulation, ckFloor, ckColor, ckAccumColor, ckAutoEmitter);
 
 var
   Tracks: array[TTrack] of TFILTER_ITEM_TRACK;
   Selects: array[TSelect] of TFILTER_ITEM_SELECT;
-  Options: array[TSelect, 0..FX_PRESET_COUNT] of TFILTER_ITEM_SELECT_ITEM;
+  Options: array[TSelect, 0..FX_STYLE_COUNT] of TFILTER_ITEM_SELECT_ITEM;
   Checks: array[TCheck] of TFILTER_ITEM_CHECK;
   Groups, GroupEnds: array[0..6] of TFILTER_ITEM_GROUP;
   ParticleColor, AccumColor: TFILTER_ITEM_COLOR;
-  PresetButton: TFILTER_ITEM_BUTTON;
+  SettingsButton: TFILTER_ITEM_BUTTON;
 
 // SDKの編集セクションで全項目を更新する。選択だけでは現在の設定へ影響しない。
-procedure ApplyPresetButton(Edit: PEDIT_SECTION; Obj: OBJECT_HANDLE;
+procedure ApplySettingsButton(Edit: PEDIT_SECTION; Obj: OBJECT_HANDLE;
   Effect, Item: PWideChar); cdecl;
 var
   Base, Preset: TFXSettings;
@@ -83,14 +83,22 @@ var
       [string(Selects[SelectItem].Name), Number]);
   end;
 
+  procedure SetCheck(CheckItem: TCheck; Enabled: Boolean);
+  begin
+    SetItem(Checks[CheckItem].Name, UTF8String(IntToStr(Ord(Enabled))));
+    Checks[CheckItem].Value := Ord(Enabled);
+  end;
+
 begin
   if (Edit = nil) or (Obj = nil) or (Effect = nil) then Exit;
   if not Assigned(Edit^.SetObjectItemValue) then Exit;
   try
     // callback2の対象名をそのまま使い、同じフィルターの2個目以降も区別する。
     TargetEffect := Effect;
-    Preset := FXPresetSettings(TFXStyle(EnsureRange(Selects[slStyle].Value, 0, FX_STYLE_COUNT - 1)),
-      Selects[slPreset].Value);
+    Preset := FXComposeSettings(
+      TFXMaterial(EnsureRange(Selects[slMaterial].Value, Ord(Low(TFXMaterial)), Ord(High(TFXMaterial)))),
+      TFXEmission(EnsureRange(Selects[slSource].Value, Ord(Low(TFXEmission)), Ord(High(TFXEmission)))),
+      TFXMotion(EnsureRange(Selects[slMotion].Value, Ord(Low(TFXMotion)), Ord(High(TFXMotion)))));
     Base := FXDefaultSettings(Preset.Style);
     // 素材の基準も切り替えてから倍率を設定し、雪の数値を雨へ掛けない。
     SetSelect(slStyle, Ord(Preset.Style));
@@ -102,6 +110,9 @@ begin
     SetTrack(trDuration, Preset.Duration);
     SetTrack(trPeriod, Preset.Period);
     SetTrack(trLife, 0);
+    SetTrack(trPrewarm, Preset.Prewarm);
+    SetCheck(ckAutoEmitter, Preset.AutomaticEmitter);
+    SetTrack(trRange, Preset.EmitterRange);
     // 発生量の倍率は瞬間発生にも掛かるので、二重に増えない値へ戻す。
     SetTrack(trBurst, Preset.Burst * 100 / Amount);
     SetTrack(trAngle, Preset.Angle - Base.Angle);
@@ -128,7 +139,7 @@ begin
     // 配置・開始時刻・開始状態・シード・色・接触・蓄積・描画範囲は個別設定を維持する。
   except
     on E: Exception do
-      OutputDebugString(PWideChar('SYNC_ParticleFX preset: ' + E.Message));
+      OutputDebugString(PWideChar('SYNC_ParticleFX settings: ' + E.Message));
   end;
 end;
 
@@ -142,6 +153,9 @@ procedure Select(Item: TSelect; Name: PWideChar; const Names: array of PWideChar
 var
   I: Integer;
 begin
+  if Length(Names) >= Length(Options[Item]) then
+    raise ERangeError.Create('Selection options exceed the reserved terminator');
+  FillChar(Options[Item], SizeOf(Options[Item]), 0);
   for I := 0 to High(Names) do
   begin
     Options[Item, I].Name := Names[I];
@@ -154,13 +168,12 @@ procedure RegisterParticleFXParameters;
 var
   I: Integer;
 begin
-  for I := Low(FX_PRESETS) to High(FX_PRESETS) do
-  begin
-    Options[slPreset, I].Name := FX_PRESETS[I].Name;
-    Options[slPreset, I].Value := FX_PRESETS[I].ID;
-  end;
-  AddSelect(Selects[slPreset], 'プリセット', 0, @Options[slPreset, 0]);
-  AddButton(PresetButton, '適用', ApplyPresetButton);
+  Select(slMaterial, '素材', FX_MATERIAL_NAMES);
+  Select(slSource, '発生', FX_SOURCE_NAMES);
+  for I := Low(FX_SOURCE_VALUES) to High(FX_SOURCE_VALUES) do
+    Options[slSource, I].Value := Ord(FX_SOURCE_VALUES[I]);
+  Select(slMotion, '動き', FX_MOTION_NAMES);
+  AddButton(SettingsButton, '設定', ApplySettingsButton);
   Select(slStyle, 'スタイル', ['雨', '雪', '水をかける', '花びら', '落ち葉',
     '紙吹雪', '砂', 'ひょう', '噴水', '光の粒', 'インク', 'スライム']);
   Track(trAmount, '発生量', 100, 0, 1000);
@@ -170,7 +183,7 @@ begin
   Track(trOffset, '時間補正', 0, -3600, 3600, 0.01);
   Track(trInitialState, '開始状態', 100, 0, 100);
 
-  AddGroup(Groups[0], '発生', 0);
+  AddGroup(Groups[0], '発生条件', 0);
   Select(slEmission, '発生方式', ['自動', '連続', '発射', '爆発・放射', '噴出']);
   AddCheck(Checks[ckAutoEmitter], '自動配置', 1);
   Track(trX, '位置X', 0, -8192, 8192, 0.1);
@@ -196,7 +209,7 @@ begin
   Track(trTurbulence, '乱流', 0, -1000, 1000);
   Track(trTurbulencePeriod, '乱流周期', 1.4, 0.1, 20, 0.1);
   Track(trVortex, '渦回転', 0, -720, 720);
-  Track(trDrag, '空気抵抗', 0, 0, 10, 0.01);
+  Track(trDrag, '空気抵抗', 0, -10, 10, 0.01);
   Track(trMaxSpeed, '最大速度', 2400, 1, 10000);
   Track(trSway, '揺れ幅', 100, 0, 500);
   Track(trSwaySpeed, '揺れ速度', 1, 0, 10, 0.1);
@@ -296,7 +309,8 @@ begin
   Result.Gust := Max(0.0, Result.Gust + Value(trGust)); Result.GustPeriod := Value(trGustPeriod);
   Result.Turbulence := Max(0.0, Result.Turbulence + Value(trTurbulence));
   Result.TurbulencePeriod := Value(trTurbulencePeriod);
-  Result.Vortex := Result.Vortex + Value(trVortex); Result.Drag := Result.Drag + Value(trDrag);
+  Result.Vortex := Result.Vortex + Value(trVortex);
+  Result.Drag := Max(0.0, Result.Drag + Value(trDrag));
   Result.MaxSpeed := Value(trMaxSpeed);
   Result.Sway := Result.Sway * Value(trSway) / 100;
   Result.SwaySpeed := Value(trSwaySpeed); Result.Rotation := Value(trRotation);
