@@ -230,7 +230,8 @@ var
   Input: TFXPixels;
   S: TFXSettings;
   Direction: TFXVec;
-  I, Angle: Integer;
+  I, Angle, Quadrant, Directions: Integer;
+  Emission: TFXEmission;
   Valid: Boolean;
 begin
   Environment := TFXEnvironment.Create;
@@ -274,6 +275,27 @@ begin
     for I := 0 to Visuals.Count - 1 do
       if FXLength(Visuals[I].Velocity) > 50.001 then Valid := False;
     Check(Valid, 'maximum velocity is enforced');
+    // 無重力と全方向はプリセットを使わず、共通の運動・発生設定で組み合わせる。
+    for Emission := feExplosion to feJet do
+    begin
+      S := FXDefaultSettings(fsWater); S.Emission := Emission;
+      S.AutomaticEmitter := False; S.EmitterRange := 0; S.Speed := 20;
+      S.Gravity := 0; S.Drag := 0; S.Sway := 0; S.DirectionSpread := 360;
+      S.Burst := 128; S.Depth := 0; S.SpeedVariation := 0;
+      Environment.Prepare(Input, 128, 128, S, 0.5);
+      Simulator.Generate(0.5, S, Environment, Visuals);
+      Directions := 0; Valid := Visuals.Count > 0;
+      for I := 0 to Visuals.Count - 1 do
+      begin
+        Quadrant := 0;
+        if Visuals[I].Velocity.X < 0 then Inc(Quadrant);
+        if Visuals[I].Velocity.Y < 0 then Inc(Quadrant, 2);
+        Directions := Directions or (1 shl Quadrant);
+        Valid := Valid and SameValue(FXLength(Visuals[I].Velocity), 20, 0.001);
+      end;
+      Check(Valid and (Directions = 15),
+        Format('emission %d uses gravity zero and spread 360 for constant-speed travel in all quadrants', [Ord(Emission)]));
+    end;
     S := FXDefaultSettings(fsFountain); S.Speed := 20; S.Gravity := 0;
     S.Duration := 1; S.Period := 3; S.Lifetime := 0.5;
     Environment.Prepare(Input, 128, 128, S, 1);
@@ -506,11 +528,22 @@ var
   Simulator: TFXSimulator;
   Visuals: TFXVisualList;
   S: TFXSettings;
-  Preset, I: Integer;
+  Preset, I, J: Integer;
   Valid: Boolean;
   Style: TFXStyle;
   Base: TFXSettings;
+  R: TFXRenderer;
+  Pixels: TFXPixels;
 begin
+  Valid := Length(FX_PRESETS) = FX_PRESET_COUNT;
+  for I := Low(FX_PRESETS) to High(FX_PRESETS) do
+  begin
+    Valid := Valid and (FX_PRESETS[I].Name <> nil) and not (FX_PRESETS[I].ID in [16, 17]);
+    for J := Low(FX_PRESETS) to I - 1 do
+      Valid := Valid and (FX_PRESETS[I].ID <> FX_PRESETS[J].ID) and
+        (string(FX_PRESETS[I].Name) <> string(FX_PRESETS[J].Name));
+  end;
+  Check(Valid, 'preset catalog contains unique names and stable IDs without weightless or radial-only entries');
   // どの素材から適用しても、牡丹雪は雪の形・速さ・色を一式選ぶ。
   Base := FXDefaultSettings(fsSnow);
   Valid := True;
@@ -521,7 +554,7 @@ begin
       (S.Emission = feContinuous) and (S.Color = Base.Color) and
       SameValue(S.Size, Base.Size * 2.2) and SameValue(S.Speed, Base.Speed * 0.75);
   end;
-  Check(Valid, 'large-snow preset selects snow material and its full profile from all eleven styles');
+  Check(Valid, 'large-snow preset selects snow material and its full profile from all twelve styles');
   S := FXPresetSettings(fsRain, 11);
   Check((S.Style = fsWater) and (S.Emission = feShot), 'bucket preset selects water and a single shot');
   S := FXPresetSettings(fsRain, 12);
@@ -539,16 +572,16 @@ begin
   begin
     S := FXPresetSettings(Style, 0);
     Valid := Valid and (S.Style = Style);
-    S := FXPresetSettings(Style, 16);
-    Valid := Valid and (S.Style = Style) and (S.Gravity = 0);
   end;
-  Check(Valid, 'standard and weightless presets preserve the selected material');
+  Check(Valid, 'standard preset preserves the selected material');
   Environment := TFXEnvironment.Create;
   Simulator := TFXSimulator.Create;
   Visuals := TFXVisualList.Create;
+  R := TFXRenderer.Create;
   try
-    for Preset := 0 to 19 do
+    for J := Low(FX_PRESETS) to High(FX_PRESETS) do
     begin
+      Preset := FX_PRESETS[J].ID;
       S := FXPresetSettings(fsSnow, Preset);
       Environment.Prepare(Empty, WIDTH, HEIGHT, S, 0.5);
       Simulator.Generate(0.5, S, Environment, Visuals);
@@ -556,10 +589,12 @@ begin
       for I := 0 to Visuals.Count - 1 do
         Valid := Valid and not IsNan(Visuals[I].Position.X) and not IsInfinite(Visuals[I].Position.Y) and
           (Visuals[I].Opacity >= 0) and (Visuals[I].Opacity <= 1) and (Visuals[I].Size > 0);
-      Check(Valid, Format('preset %d simulates visible, finite and bounded particles without a host', [Preset]));
+      R.Render(Empty, WIDTH, HEIGHT, 0.5, S, Pixels);
+      Check(Valid and (CountAlpha(Pixels) > 0),
+        Format('preset %d renders visible pixels with finite and bounded particles without a host', [Preset]));
     end;
   finally
-    Visuals.Free; Simulator.Free; Environment.Free;
+    R.Free; Visuals.Free; Simulator.Free; Environment.Free;
   end;
 end;
 

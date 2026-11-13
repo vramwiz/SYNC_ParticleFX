@@ -151,12 +151,15 @@ begin
 end;
 
 procedure RegisterParticleFXParameters;
+var
+  I: Integer;
 begin
-  Select(slPreset, 'プリセット', ['標準', '小雨・少量', '豪雨・大量', '横殴り・横風',
-    '暴風雨・吹雪', '嵐・猛吹雪', '霧雨・粉雪', '牡丹雪', '風に流される',
-    '舞い上がる', '渦巻き・竜巻', 'バケツ', '強い水流', 'シャワー',
-    '間欠噴出', '連続噴射', '無重力', '全方向放射', '爆発', '砂嵐',
-    'スライム', 'さらさら', 'ねばねば']);
+  for I := Low(FX_PRESETS) to High(FX_PRESETS) do
+  begin
+    Options[slPreset, I].Name := FX_PRESETS[I].Name;
+    Options[slPreset, I].Value := FX_PRESETS[I].ID;
+  end;
+  AddSelect(Selects[slPreset], 'プリセット', 0, @Options[slPreset, 0]);
   AddButton(PresetButton, '適用', ApplyPresetButton);
   Select(slStyle, 'スタイル', ['雨', '雪', '水をかける', '花びら', '落ち葉',
     '紙吹雪', '砂', 'ひょう', '噴水', '光の粒', 'インク', 'スライム']);

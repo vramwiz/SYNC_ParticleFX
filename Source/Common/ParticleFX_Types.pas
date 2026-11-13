@@ -15,7 +15,28 @@ const
   FX_MAX_PARTICLES = 12000;
   FX_MAX_PIXELS = 16777216;
   FX_STYLE_COUNT = 12;
-  FX_PRESET_COUNT = 23;
+  FX_PRESET_COUNT = 21;
+
+type
+  TFXPresetInfo = record
+    ID: Integer;
+    Name: PWideChar;
+  end;
+
+const
+  // 削除した16・17を詰めず、残るプリセットの識別値を維持する。
+  FX_PRESETS: array[0..FX_PRESET_COUNT - 1] of TFXPresetInfo = (
+    (ID: 0; Name: '標準'), (ID: 1; Name: '小雨・少量'),
+    (ID: 2; Name: '豪雨・大量'), (ID: 3; Name: '横殴り・横風'),
+    (ID: 4; Name: '暴風雨・吹雪'), (ID: 5; Name: '嵐・猛吹雪'),
+    (ID: 6; Name: '霧雨・粉雪'), (ID: 7; Name: '牡丹雪'),
+    (ID: 8; Name: '風に流される'), (ID: 9; Name: '舞い上がる'),
+    (ID: 10; Name: '渦巻き・竜巻'), (ID: 11; Name: 'バケツ'),
+    (ID: 12; Name: '強い水流'), (ID: 13; Name: 'シャワー'),
+    (ID: 14; Name: '間欠噴出'), (ID: 15; Name: '連続噴射'),
+    (ID: 18; Name: '爆発'), (ID: 19; Name: '砂嵐'),
+    (ID: 20; Name: 'スライム'), (ID: 21; Name: 'さらさら'),
+    (ID: 22; Name: 'ねばねば'));
 
 type
   TFXStyle = (fsRain, fsSnow, fsWater, fsPetal, fsLeaf, fsConfetti,
@@ -332,12 +353,12 @@ end;
 function FXPresetSettings(Style: TFXStyle; Preset: Integer): TFXSettings;
 begin
   // 素材を指定する名前では、直前のスタイルに依存せず同じ素材を選ぶ。
-  // 量・風・無重力などの共通プリセットは、現在の素材を引き継ぐ。
+  // 量・風などの共通プリセットは、現在の素材を引き継ぐ。
   case Preset of
     7: Style := fsSnow;
     11, 12: Style := fsWater;
     13..15: Style := fsFountain;
-    17, 18: Style := fsSpark;
+    18: Style := fsSpark;
     19: Style := fsSand;
     20..22: Style := fsSlime;
   end;
@@ -363,11 +384,9 @@ begin
     13: begin Result.Emission := feJet; Result.Rate := Result.Rate * 1.6; Result.DirectionSpread := 55; end;
     14: begin Result.Emission := feJet; Result.Duration := 1.5; Result.Period := 3; end;
     15: begin Result.Emission := feJet; Result.Rate := Result.Rate * 2; Result.DirectionSpread := 15; end;
-    16: begin Result.Gravity := 0; Result.Drag := 0; Result.Sway := 0; end;
-    17, 18: begin
+    18: begin
       Result.Emission := feExplosion; Result.DirectionSpread := 360;
-      Result.Burst := 750;
-      if Preset = 18 then begin Result.Speed := Result.Speed * 2; Result.Glow := 0.7; end;
+      Result.Burst := 750; Result.Speed := Result.Speed * 2; Result.Glow := 0.7;
     end;
     19: begin Result.Angle := 90; Result.Gravity := 0; Result.Wind := 220;
       Result.Rate := Result.Rate * 3; Result.Turbulence := 30; end;
