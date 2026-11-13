@@ -9,10 +9,12 @@
 
 uses
   System.SysUtils, System.Math, System.IOUtils, System.Diagnostics, System.Classes,
+  System.Generics.Collections,
   Winapi.Windows, Winapi.ActiveX, Vcl.Graphics, Vcl.Imaging.pngimage, Vcl.Imaging.GIFImg,
   ParticleFX_Types in '..\Source\Common\ParticleFX_Types.pas',
   ParticleFX_Collision in '..\Source\Common\ParticleFX_Collision.pas',
   ParticleFX_Simulation in '..\Source\Common\ParticleFX_Simulation.pas',
+  ParticleFX_Viscous in '..\Source\Common\ParticleFX_Viscous.pas',
   ParticleFX_Renderer in '..\Source\Common\ParticleFX_Renderer.pas';
 
 const
@@ -506,7 +508,41 @@ var
   S: TFXSettings;
   Preset, I: Integer;
   Valid: Boolean;
+  Style: TFXStyle;
+  Base: TFXSettings;
 begin
+  // どの素材から適用しても、牡丹雪は雪の形・速さ・色を一式選ぶ。
+  Base := FXDefaultSettings(fsSnow);
+  Valid := True;
+  for Style := Low(TFXStyle) to High(TFXStyle) do
+  begin
+    S := FXPresetSettings(Style, 7);
+    Valid := Valid and (S.Style = fsSnow) and (S.Shape = shSnow) and
+      (S.Emission = feContinuous) and (S.Color = Base.Color) and
+      SameValue(S.Size, Base.Size * 2.2) and SameValue(S.Speed, Base.Speed * 0.75);
+  end;
+  Check(Valid, 'large-snow preset selects snow material and its full profile from all eleven styles');
+  S := FXPresetSettings(fsRain, 11);
+  Check((S.Style = fsWater) and (S.Emission = feShot), 'bucket preset selects water and a single shot');
+  S := FXPresetSettings(fsRain, 12);
+  Check((S.Style = fsWater) and (S.Emission = feShot), 'water-stream preset selects water and its shot profile');
+  S := FXPresetSettings(fsInk, 14);
+  Check((S.Style = fsFountain) and (S.Emission = feJet) and (S.Angle = 180),
+    'intermittent-jet preset selects the fountain material and upward direction');
+  S := FXPresetSettings(fsSnow, 18);
+  Check((S.Style = fsSpark) and (S.Shape = shLight) and (S.Emission = feExplosion),
+    'explosion preset selects light particles and radial emission');
+  S := FXPresetSettings(fsWater, 19);
+  Check((S.Style = fsSand) and (S.Shape = shGrain), 'sandstorm preset selects sand material');
+  Valid := True;
+  for Style := Low(TFXStyle) to High(TFXStyle) do
+  begin
+    S := FXPresetSettings(Style, 0);
+    Valid := Valid and (S.Style = Style);
+    S := FXPresetSettings(Style, 16);
+    Valid := Valid and (S.Style = Style) and (S.Gravity = 0);
+  end;
+  Check(Valid, 'standard and weightless presets preserve the selected material');
   Environment := TFXEnvironment.Create;
   Simulator := TFXSimulator.Create;
   Visuals := TFXVisualList.Create;
@@ -524,6 +560,358 @@ begin
     end;
   finally
     Visuals.Free; Simulator.Free; Environment.Free;
+  end;
+end;
+
+procedure SlimeChecks;
+const
+  W = 360; H = 240; M = 120;
+var
+  Image, Blank, Pixels, Saved, Other, Slope: TFXPixels;
+  R, Cold: TFXRenderer;
+  Flow: TFXViscousFlow;
+  Factory: TFXSimulator;
+  Env: TFXEnvironment;
+  V: TFXVisualList;
+  S, Plain: TFXSettings;
+  X, Y, I, Below, ContactCount, Area, K: Integer;
+  Mean, VarianceLow, VarianceHigh: Double;
+  Valid: Boolean;
+  GIF, Decoded: TGIFImage;
+  Bitmap: TBitmap;
+  Frame: TGIFFrame;
+  Control: TGIFGraphicControlExtension;
+  Loop: TGIFAppExtNSLoop;
+  Row: PBytesRow;
+  A, BG, F: Integer;
+  P1, P2: TFXParticle;
+  Dist, FirstX: Double;
+
+  procedure ConfigureStream;
+  begin
+    S := FXDefaultSettings(fsSlime); S.Emission := feJet;
+    S.AutomaticEmitter := False; S.EmitterY := -90; S.EmitterRange := 100;
+    S.Rate := 65; S.Size := 5; S.Depth := 0; S.SizeVariation := 0;
+    S.SpeedVariation := 0; S.DirectionSpread := 4; S.Speed := 100;
+    S.Gravity := 200; S.DripTime := 0.4; S.AccumAmount := 100;
+    S.Prewarm := -1; S.BottomMargin := M;
+  end;
+
+  function VelocityVariance: Double;
+  var
+    J: Integer;
+  begin
+    Mean := 0;
+    for J := 0 to V.Count - 1 do Mean := Mean + V[J].Velocity.X;
+    Mean := Mean / Max(1, V.Count); Result := 0;
+    for J := 0 to V.Count - 1 do Result := Result + Sqr(V[J].Velocity.X - Mean);
+    Result := Result / Max(1, V.Count);
+  end;
+
+begin
+  SetLength(Image, W * H); SetLength(Blank, W * H);
+  for Y := 45 to 184 do
+    for X := 70 to 289 do
+      if (X < 90) or (X >= 270) or (Y >= 165) then
+      begin I := Y * W + X; Image[I].R := 86; Image[I].G := 114; Image[I].B := 145; Image[I].A := 255; end;
+  SavePNG('20_slime_source', Image, W, H);
+  R := TFXRenderer.Create; Cold := TFXRenderer.Create;
+  Factory := TFXSimulator.Create; Flow := TFXViscousFlow.Create(Factory);
+  Env := TFXEnvironment.Create; V := TFXVisualList.Create;
+  try
+    ConfigureStream; Plain := S;
+    R.Render(Image, W, H, 0.7, S, Pixels);
+    Check((R.OutputWidth = W) and (R.OutputHeight = H + M), 'slime output includes the requested bottom margin');
+    SavePNG('21_slime_arriving', Pixels, W, H + M);
+    R.Render(Image, W, H, 2.456, S, Saved);
+    SavePNG('22_slime_overflow', Saved, W, H + M);
+    R.Render(Image, W, H, 4.2, S, Pixels);
+    SavePNG('23_slime_dripping', Pixels, W, H + M);
+    R.Render(Image, W, H, 2.456, S, Other);
+    Check(EqualPixels(Saved, Other), 'viscous reverse seek reproduces an exact fractional frame');
+    Cold.Render(Image, W, H, 2.456, S, Other);
+    Check(EqualPixels(Saved, Other), 'viscous cold and warm checkpoints produce identical pixels');
+    Env.Prepare(Image, W, H, S, 4.2);
+    Flow.Generate(4.2, S, Env, V); Below := 0; ContactCount := 0; Valid := True;
+    for I := 0 to V.Count - 1 do
+    begin
+      Valid := Valid and not IsNan(V[I].Position.X) and not IsInfinite(V[I].Position.Y);
+      if V[I].IsSplash then
+      begin
+        Inc(ContactCount);
+        if (V[I].Position.Y > 200) and (V[I].Position.X > 100) and (V[I].Position.X < 260) then Inc(Below);
+      end;
+    end;
+    Writeln(Format('SLIME contacts=%d escaped-U=%d', [ContactCount, Below]));
+    Check(Valid and (V.Count <= FX_MAX_VISCOUS_PARTICLES), 'viscous particles remain finite and bounded');
+    Check((ContactCount > 0) and (Below > 0), 'accumulating slime drains through a concave U instead of remaining fixed');
+    Below := 0;
+    for Y := H to H + M - 1 do
+      for X := 0 to W - 1 do if Pixels[Y * W + X].A > 0 then Inc(Below);
+    Check(Below > 0, 'slime remains visible below the original image canvas');
+
+    S := Plain; S.Emission := feShot; S.Burst := 1; S.EmitterRange := 0;
+    S.Response := 3;
+    Env.Prepare(Image, W, H, S, 1.1); Flow.Generate(1.1, S, Env, V);
+    Check(V.Count = 0, 'viscous disappear response removes particles at first contact');
+    S.Response := 1; S.Bounce := 0.8;
+    Env.Prepare(Image, W, H, S, 1.1); Flow.Generate(1.1, S, Env, V);
+    Check((V.Count = 1) and V[0].IsSplash and (V[0].Velocity.Y < 0),
+      'viscous reflection response uses the contact normal and bounce strength');
+
+    // 斜面を実際に伝い、接触後も粒子の位置を更新することを確認する。
+    SetLength(Slope, W * H);
+    for X := 60 to 299 do
+      for Y := Round(85 + (X - 60) * 0.4) to Min(H - 1, Round(100 + (X - 60) * 0.4)) do
+        Slope[Y * W + X].A := 255;
+    S := Plain; S.Emission := feShot; S.Burst := 1; S.EmitterRange := 0;
+    S.EmitterX := -80; S.EmitterY := -85; S.DirectionSpread := 0;
+    S.DripTime := 5; S.Adhesion := 1; S.Viscosity := 0.5; S.Gravity := 100;
+    Env.Prepare(Slope, W, H, S, 0.8); Flow.Generate(0.8, S, Env, V);
+    FirstX := 100;
+    if V.Count > 0 then FirstX := V[0].Position.X;
+    Flow.Generate(1.8, S, Env, V);
+    Check((V.Count = 1) and V[0].IsSplash and (V[0].Position.X > FirstX + 2),
+      'slime keeps sliding downhill along an alpha slope after contact');
+
+    S := Plain; S.FloorEnabled := True; S.FloorPosition := 75;
+    SetLength(Pixels, W * (H + M));
+    Env.Prepare(Pixels, W, H + M, S, 3, H);
+    Check(SameValue(Env.FloorY, H * 0.75), 'bottom margin leaves the original floor position unchanged');
+    S.Collision := False;
+    Env.Prepare(Image, W, H, S, 3); Flow.Generate(3, S, Env, V); Valid := True;
+    for I := 0 to V.Count - 1 do Valid := Valid and not V[I].IsSplash;
+    Check(Valid, 'disabling collision also disables viscous image and floor contact');
+
+    S := Plain; S.Rate := 0; S.Accumulation := False;
+    R.Render(Image, W, H, 2, S, Pixels);
+    Valid := CompareMem(@Image[0], @Pixels[0], Length(Image) * 4);
+    for I := Length(Image) to High(Pixels) do Valid := Valid and (Pixels[I].A = 0);
+    Check(Valid, 'bottom padding preserves original pixel positions and transparent empty space');
+
+    S := FXDefaultSettings(fsSlime); S.Emission := feShot; S.Burst := 12;
+    S.AutomaticEmitter := False; S.EmitterRange := 120; S.EmitterX := -80;
+    S.Speed := 80; S.Angle := 90; S.Gravity := 0; S.Drag := 0;
+    S.Depth := 0; S.Size := 1; S.SpeedVariation := 0.8; S.DirectionSpread := 0;
+    S.Cohesion := 0; S.Viscosity := 0; S.Prewarm := -1; S.Collision := False;
+    Env.Prepare(Blank, W, H, S, 0.12); Flow.Generate(0.12, S, Env, V);
+    VarianceLow := VelocityVariance;
+    S.Viscosity := 1;
+    Env.Prepare(Blank, W, H, S, 0.12); Flow.Generate(0.12, S, Env, V);
+    VarianceHigh := VelocityVariance;
+    Writeln(Format('SLIME velocity variance low=%.3f high=%.3f', [VarianceLow, VarianceHigh]));
+    Check((V.Count = 12) and (VarianceHigh < VarianceLow * 0.8), 'viscosity smooths velocity differences between neighboring particles');
+    Check(Mean > 40, 'weightless viscous particles keep moving without artificial downward gravity');
+    S.Burst := FX_MAX_PARTICLES; S.MaxSpeed := 50;
+    Env.Prepare(Blank, W, H, S, 0.02); Flow.Generate(0.02, S, Env, V); Valid := True;
+    for I := 0 to V.Count - 1 do Valid := Valid and (FXLength(V[I].Velocity) <= 50.0001);
+    Check((V.Count = FX_MAX_VISCOUS_PARTICLES) and Valid,
+      'large viscous bursts respect the particle cap and maximum speed');
+    S.Burst := 2; S.Size := 5; S.SizeVariation := 0; S.EmitterRange := 400;
+    S.Speed := 0; S.SpeedVariation := 0; S.Viscosity := 0;
+    for K := 1 to 1000 do
+    begin
+      S.Seed := K;
+      P1 := Factory.NewParticle(0, 0, S.Lifetime, S, W, H);
+      P2 := Factory.NewParticle(1, 0, S.Lifetime, S, W, H);
+      Dist := FXLength(FXVec(P1.Position.X - P2.Position.X, P1.Position.Y - P2.Position.Y));
+      if (Dist >= 13.1) and (Dist <= 13.3) then Break;
+    end;
+    X := Round((P1.Position.X + P2.Position.X) * 0.5);
+    Y := Round((P1.Position.Y + P2.Position.Y) * 0.5);
+    R.Render(Blank, W, H, 0.04, S, Pixels); Area := Pixels[Y * W + X].A;
+    S.Cohesion := 1; R.Render(Blank, W, H, 0.04, S, Other);
+    Check((CountAlpha(Pixels) > 0) and (Other[Y * W + X].A > Area + 30),
+      'cohesion bridges the visible gap between two neighboring slime particles');
+    S.DrawMode := 2; R.Render(Blank, W, H, 0.12, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'viscous contact-only mode hides particles before contact');
+    S.DrawMode := 1; R.Render(Blank, W, H, 25, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'expired slime shots leave no static accumulation behind');
+    S.StartTime := 2; R.Render(Blank, W, H, 1, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'slime shots are absent before their start time');
+    for K := 20 to 22 do
+    begin
+      S := FXPresetSettings(fsRain, K);
+      R.Render(Blank, W, H, 0.7, S, Pixels);
+      Check((S.Style = fsSlime) and (CountAlpha(Pixels) > 0),
+        Format('preset %d selects slime and renders visible particles', [K]));
+    end;
+
+    // 人物・斜面・段差にも同じソルバーを使う。
+    S := FXDefaultSettings(fsSlime); S.BottomMargin := 100; S.AccumAmount := 65;
+    R.Render(Source, WIDTH, HEIGHT, 3, S, Pixels);
+    SavePNG('24_slime_person', Pixels, WIDTH, HEIGHT + 100);
+
+    if (ParamCount >= 2) and SameText(ParamStr(2), 'animation') then
+    begin
+      S := Plain; GIF := TGIFImage.Create; Bitmap := TBitmap.Create;
+      try
+        GIF.ColorReduction := rmQuantize; GIF.DitherMode := dmNearest;
+        Bitmap.SetSize(W, H + M);
+        for F := 0 to 31 do
+        begin
+          R.Render(Image, W, H, F * 0.12, S, Pixels);
+          Bitmap.PixelFormat := pf32bit;
+          for Y := 0 to H + M - 1 do
+          begin
+            Row := Bitmap.ScanLine[Y];
+            for X := 0 to W - 1 do
+            begin
+              I := Y * W + X; A := Pixels[I].A;
+              if ((X div 16 + Y div 16) mod 2) = 0 then BG := 32 else BG := 43;
+              Row[X * 4] := (Pixels[I].B * A + (BG + 18) * (255 - A)) div 255;
+              Row[X * 4 + 1] := (Pixels[I].G * A + (BG + 8) * (255 - A)) div 255;
+              Row[X * 4 + 2] := (Pixels[I].R * A + BG * (255 - A)) div 255;
+              Row[X * 4 + 3] := 255;
+            end;
+          end;
+          Frame := GIF.Add(Bitmap);
+          Control := TGIFGraphicControlExtension.Create(Frame); Control.Delay := 12;
+        end;
+        Loop := TGIFAppExtNSLoop.Create(GIF.Images[0]); Loop.Loops := 0;
+        GIF.SaveToFile(TPath.Combine(OutputDir, 'slime_demo.gif'));
+        Decoded := TGIFImage.Create;
+        try
+          Decoded.LoadFromFile(TPath.Combine(OutputDir, 'slime_demo.gif'));
+          Check(Decoded.Images.Count = 32, 'slime GIF decodes all 32 independent animation frames');
+        finally Decoded.Free; end;
+      finally Bitmap.Free; GIF.Free; end;
+
+      S := FXDefaultSettings(fsSlime); S.BottomMargin := 100; S.AccumAmount := 65;
+      GIF := TGIFImage.Create; Bitmap := TBitmap.Create;
+      try
+        GIF.ColorReduction := rmQuantize; GIF.DitherMode := dmNearest;
+        Bitmap.SetSize(WIDTH div 2, (HEIGHT + 100) div 2);
+        for F := 0 to 31 do
+        begin
+          R.Render(Source, WIDTH, HEIGHT, F * 0.12, S, Pixels);
+          Bitmap.PixelFormat := pf32bit;
+          for Y := 0 to Bitmap.Height - 1 do
+          begin
+            Row := Bitmap.ScanLine[Y];
+            for X := 0 to Bitmap.Width - 1 do
+            begin
+              I := Y * 2 * WIDTH + X * 2; A := Pixels[I].A;
+              if ((X div 16 + Y div 16) mod 2) = 0 then BG := 32 else BG := 43;
+              Row[X * 4] := (Pixels[I].B * A + (BG + 18) * (255 - A)) div 255;
+              Row[X * 4 + 1] := (Pixels[I].G * A + (BG + 8) * (255 - A)) div 255;
+              Row[X * 4 + 2] := (Pixels[I].R * A + BG * (255 - A)) div 255;
+              Row[X * 4 + 3] := 255;
+            end;
+          end;
+          Frame := GIF.Add(Bitmap);
+          Control := TGIFGraphicControlExtension.Create(Frame); Control.Delay := 12;
+        end;
+        Loop := TGIFAppExtNSLoop.Create(GIF.Images[0]); Loop.Loops := 0;
+        GIF.SaveToFile(TPath.Combine(OutputDir, 'slime_person_demo.gif'));
+        Decoded := TGIFImage.Create;
+        try
+          Decoded.LoadFromFile(TPath.Combine(OutputDir, 'slime_person_demo.gif'));
+          Check(Decoded.Images.Count = 32, 'person slime GIF decodes all 32 independently simulated frames');
+        finally Decoded.Free; end;
+      finally Bitmap.Free; GIF.Free; end;
+    end;
+  finally
+    V.Free; Env.Free; Flow.Free; Factory.Free; Cold.Free; R.Free;
+  end;
+end;
+
+procedure SlimeMotionChecks;
+var
+  Env: TFXEnvironment;
+  Factory: TFXSimulator;
+  Flow: TFXViscousFlow;
+  V: TFXVisualList;
+  Previous: TDictionary<Int64, TFXFlowParticle>;
+  Particles: TArray<TFXFlowParticle>;
+  P, Old: TFXFlowParticle;
+  Padded: TFXPixels;
+  S: TFXSettings;
+  Log: TStringBuilder;
+  F, I, Side, UpwardCorrections, InsideSurface: Integer;
+  DX, DY, Error, MaxError, MaxSurfaceX, MaxVX, StartX: Double;
+  Wall: TFXPixels;
+  Valid: Boolean;
+begin
+  Env := TFXEnvironment.Create; Factory := TFXSimulator.Create;
+  Flow := TFXViscousFlow.Create(Factory); V := TFXVisualList.Create;
+  Previous := TDictionary<Int64, TFXFlowParticle>.Create;
+  Log := TStringBuilder.Create;
+  try
+    SetLength(Padded, WIDTH * (HEIGHT + 100));
+    Move(Source[0], Padded[0], Length(Source) * 4);
+    S := FXDefaultSettings(fsSlime); S.BottomMargin := 100; S.AccumAmount := 65;
+    Env.Prepare(Padded, WIDTH, HEIGHT + 100, S, 0, HEIGHT);
+    MaxError := 0; MaxVX := 0; MaxSurfaceX := 0; UpwardCorrections := 0; InsideSurface := 0;
+    Log.AppendLine('time,id,oldphase,phase,x0,y0,x1,y1,vx0,vy0,vx1,vy1,error');
+    for F := 0 to 240 do
+    begin
+      Flow.Generate(F / 60, S, Env, V); Particles := Flow.SnapshotParticles;
+      for I := 0 to High(Particles) do
+      begin
+        P := Particles[I];
+        if (P.Phase = fpSurface) and Env.ContainsImage(P.Position) then Inc(InsideSurface);
+        if Previous.TryGetValue(P.Particle.ID, Old) then
+        begin
+          DX := P.Position.X - Old.Position.X; DY := P.Position.Y - Old.Position.Y;
+          Error := FXLength(FXVec(DX - P.Velocity.X / 60, DY - P.Velocity.Y / 60));
+          if (P.Position.X >= 0) and (P.Position.X < WIDTH) and
+            (P.Position.Y >= 0) and (P.Position.Y < HEIGHT + 100) then
+          begin
+            MaxError := Max(MaxError, Error); MaxVX := Max(MaxVX, Abs(P.Velocity.X));
+            if (P.Phase = fpSurface) and (Old.Phase = fpSurface) then
+              MaxSurfaceX := Max(MaxSurfaceX, Abs(DX - P.Velocity.X / 60));
+            if (DY < -0.5) and (Old.Velocity.Y >= 0) and (P.Velocity.Y >= 0) then Inc(UpwardCorrections);
+            if Error > 1 then Log.AppendLine(Format(
+              '%.4f,%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f',
+              [F / 60, P.Particle.ID, Ord(Old.Phase), Ord(P.Phase), Old.Position.X, Old.Position.Y,
+               P.Position.X, P.Position.Y, Old.Velocity.X, Old.Velocity.Y,
+               P.Velocity.X, P.Velocity.Y, Error], TFormatSettings.Invariant));
+          end;
+        end;
+        Previous.AddOrSetValue(P.Particle.ID, P);
+      end;
+    end;
+    TFile.WriteAllText(TPath.Combine(OutputDir, 'slime_motion.csv'), Log.ToString, TEncoding.UTF8);
+    Writeln(Format('SLIME MOTION max-correction=%.3f max-vx=%.3f upward-corrections=%d',
+      [MaxError, MaxVX, UpwardCorrections]));
+    Writeln(Format('SLIME SURFACE max-lateral-correction=%.3f inside-surface=%d', [MaxSurfaceX, InsideSurface]));
+    Check(InsideSurface = 0, 'person sample keeps surface-attached slime outside the opaque image');
+    Check(MaxSurfaceX < 4, 'person sample has no repeated lateral transport from surface correction');
+
+    SetLength(Wall, 360 * 240);
+    for F := 0 to 239 do
+      for I := 140 to 219 do Wall[F * 360 + I].A := 255;
+    for Side := -1 to 1 do
+    begin
+      if Side = 0 then Continue;
+      S := FXDefaultSettings(fsSlime); S.Emission := feShot; S.Burst := 1;
+      S.AutomaticEmitter := False; S.EmitterRange := 0; S.Depth := 0;
+      S.Size := 5; S.SizeVariation := 0; S.Speed := 100; S.SpeedVariation := 0;
+      S.DirectionSpread := 0; S.Gravity := 0; S.Drag := 0; S.Cohesion := 0;
+      S.Viscosity := 0; S.Prewarm := -1; S.EmitterY := -60;
+      if Side < 0 then StartX := 139 else StartX := 221;
+      S.EmitterX := StartX - 180; S.Angle := Side * 10;
+      Env.Prepare(Wall, 360, 240, S, 0); Valid := True;
+      for F := 1 to 45 do
+      begin
+        Flow.Generate(F / 60, S, Env, V); Particles := Flow.SnapshotParticles;
+        if Length(Particles) <> 1 then begin Valid := False; Continue; end;
+        Valid := Valid and not Particles[0].Contact and
+          ((Particles[0].Position.X - StartX) * Side >= -1E-6);
+      end;
+      Check(Valid, Format('slime moving away from wall side %d is not pulled inward', [Side]));
+
+      S.EmitterX := Side * 52; S.Angle := -Side * 90;
+      Env.Prepare(Wall, 360, 240, S, 0); Flow.Generate(0.5, S, Env, V);
+      Particles := Flow.SnapshotParticles;
+      Valid := Length(Particles) = 1;
+      if Valid then Valid := (Particles[0].Phase = fpSurface) and
+        (Particles[0].Normal.X * Side > 0.9) and not Env.ContainsImage(Particles[0].Position);
+      Check(Valid, Format('slime approaching wall side %d retains the outward surface normal', [Side]));
+    end;
+  finally
+    Log.Free; Previous.Free; V.Free; Flow.Free; Factory.Free; Env.Free;
   end;
 end;
 
@@ -626,6 +1014,107 @@ begin
   end;
 end;
 
+procedure StartupStateChecks;
+const
+  Styles: array[0..2] of TFXStyle = (fsRain, fsSnow, fsSlime);
+  Names: array[0..2] of string = ('rain', 'snow', 'slime');
+var
+  R, Cold: TFXRenderer;
+  S, Reference: TFXSettings;
+  Timing, HalfTiming, ZeroTiming: TFXStartupTiming;
+  Pixels, HalfPixels, FullPixels, Saved, Other: TFXPixels;
+  Style: TFXStyle;
+  I, J, Area0, AreaHalf, AreaFull: Integer;
+  Valid: Boolean;
+begin
+  R := TFXRenderer.Create; Cold := TFXRenderer.Create;
+  try
+    Valid := True;
+    for Style := Low(TFXStyle) to High(TFXStyle) do
+    begin
+      S := FXDefaultSettings(Style); S.InitialState := 0;
+      R.Render(Source, WIDTH, HEIGHT, 0, S, Pixels);
+      Valid := Valid and EqualPixels(Source, Pixels);
+    end;
+    Check(Valid, 'initial state zero starts all twelve styles without particles, contact or accumulation');
+
+    for I := 0 to High(Styles) do
+    begin
+      S := FXDefaultSettings(Styles[I]); Timing := FXStartupTiming(S, WIDTH, HEIGHT);
+      S.InitialState := 50; HalfTiming := FXStartupTiming(S, WIDTH, HEIGHT);
+      S.InitialState := 0; ZeroTiming := FXStartupTiming(S, WIDTH, HEIGHT);
+      Check((Timing.Prewarm > 0) and SameValue(HalfTiming.Prewarm, Timing.Prewarm * 0.5) and
+        (ZeroTiming.Prewarm = 0) and SameValue(ZeroTiming.ParticleLifetime, Timing.ParticleLifetime),
+        Names[I] + ': initial progress scales prewarm without shortening particle lifetime');
+      S.AccumAmount := 65;
+      for J := 0 to 2 do
+      begin
+        S.InitialState := J * 50;
+        R.Render(Source, WIDTH, HEIGHT, 0, S, Pixels);
+        SavePNG(Format('startup_%s_%3.3d', [Names[I], J * 50]), Pixels, WIDTH, HEIGHT);
+        if J = 1 then HalfPixels := Copy(Pixels);
+        if J = 2 then FullPixels := Copy(Pixels);
+      end;
+      Check(not EqualPixels(HalfPixels, Source) and not EqualPixels(HalfPixels, FullPixels),
+        Names[I] + ': state fifty displays a distinct partly progressed initial scene');
+      S.InitialState := 0;
+      R.Render(Source, WIDTH, HEIGHT, 0, S, Pixels);
+      Check(EqualPixels(Source, Pixels), Names[I] + ': changing one hundred back to zero clears the previous initial state');
+      R.Render(Source, WIDTH, HEIGHT, 2, S, Pixels);
+      Check(not EqualPixels(Source, Pixels), Names[I] + ': particles advance naturally after an empty start');
+
+      S.InitialState := 50;
+      R.Render(Source, WIDTH, HEIGHT, 1.2345, S, Saved);
+      R.Render(Source, WIDTH, HEIGHT, 3.4, S, Pixels);
+      R.Render(Source, WIDTH, HEIGHT, 1.2345, S, Other);
+      Valid := EqualPixels(Saved, Other);
+      Cold.Render(Source, WIDTH, HEIGHT, 1.2345, S, Other);
+      Check(Valid and EqualPixels(Saved, Other), Names[I] + ': partial initial state survives reverse seek and a cold cache');
+
+      S.Wind := 100; S.Gust := 50; S.Turbulence := 10; S.Offset := 0.75;
+      R.Render(Source, WIDTH, HEIGHT, 0.25, S, Saved);
+      S.Offset := 0;
+      Cold.Render(Source, WIDTH, HEIGHT, 1, S, Other);
+      Check(EqualPixels(Saved, Other), Names[I] + ': time correction keeps its original seconds and wind clock');
+
+      S := FXDefaultSettings(Styles[I]); S.StartTime := 2.237; S.InitialState := 0;
+      R.Render(Source, WIDTH, HEIGHT, S.StartTime, S, Pixels);
+      Check(EqualPixels(Source, Pixels), Names[I] + ': a fractional emission start with state zero has no pre-start particles');
+      S.InitialState := 100;
+      R.Render(Empty, WIDTH, HEIGHT, S.StartTime - 0.1, S, Pixels);
+      Check(CountAlpha(Pixels) = 0, Names[I] + ': a prepared continuous effect is hidden before its scheduled start');
+      R.Render(Empty, WIDTH, HEIGHT, S.StartTime, S, Pixels);
+      Check(CountAlpha(Pixels) > 0, Names[I] + ': scheduled start one hundred displays the prepared state immediately');
+    end;
+
+    S := FXDefaultSettings(fsSnow); S.Rate := 0; S.AccumAmount := 100;
+    S.InitialState := 0; R.Render(Source, WIDTH, HEIGHT, 0, S, Pixels); Area0 := CountAlpha(Pixels);
+    S.InitialState := 50; R.Render(Source, WIDTH, HEIGHT, 0, S, Pixels); AreaHalf := CountAlpha(Pixels);
+    S.InitialState := 100; R.Render(Source, WIDTH, HEIGHT, 0, S, FullPixels); AreaFull := CountAlpha(FullPixels);
+    Check((Area0 < AreaHalf) and (AreaHalf < AreaFull), 'initial snow accumulation progresses monotonically at zero, fifty and one hundred');
+    S.InitialState := 0; Timing := FXStartupTiming(S, WIDTH, HEIGHT);
+    R.Render(Source, WIDTH, HEIGHT, Timing.RampTime, S, Pixels);
+    Check(EqualPixels(FullPixels, Pixels), 'snow accumulation grows from empty to its existing target amount');
+    S.InitialState := 50;
+    R.Render(Source, WIDTH, HEIGHT, -Timing.RampTime * 0.25, S, Pixels);
+    Reference := S; Reference.InitialState := 100; Reference.AccumAmount := 25;
+    Cold.Render(Source, WIDTH, HEIGHT, 0, Reference, Other);
+    Check(EqualPixels(Pixels, Other), 'negative time correction can preview the earlier accumulation state');
+
+    S := FXDefaultSettings(fsWater); S.InitialState := 0;
+    R.Render(Empty, WIDTH, HEIGHT, 0.4, S, Saved);
+    S.InitialState := 100; R.Render(Empty, WIDTH, HEIGHT, 0.4, S, Other);
+    Check(EqualPixels(Saved, Other), 'initial state does not advance single-shot emission time');
+    S := FXDefaultSettings(fsFountain); S.InitialState := 0;
+    R.Render(Empty, WIDTH, HEIGHT, 0.7, S, Saved);
+    S.InitialState := 100; R.Render(Empty, WIDTH, HEIGHT, 0.7, S, Other);
+    Check(EqualPixels(Saved, Other), 'initial state preserves the existing continuous-jet emission time');
+    Check(EqualPixels(Source, SourceCopy), 'startup progress preserves every input RGBA pixel');
+  finally
+    Cold.Free; R.Free;
+  end;
+end;
+
 procedure Run;
 var
   Area0, Area50, Area100: Integer;
@@ -706,7 +1195,7 @@ begin
       Writeln('EMPTY DEFAULT STYLE ', FXStyleName(Style));
     end;
   end;
-  Check(DefaultsVisible, 'all eleven styles produce visible standalone effects without manual emitter positioning');
+  Check(DefaultsVisible, 'all twelve styles produce visible standalone effects without manual emitter positioning');
   Settings := FXDefaultSettings(fsRain); Settings.DrawMode := 2;
   Renderer.Render(Empty, WIDTH, HEIGHT, 2, Settings, Output);
   Check(CountAlpha(Output) = 0, 'contact-only mode suppresses airborne particles for layered compositions');
@@ -736,6 +1225,9 @@ begin
   AlphaAndCacheChecks;
   FullHDChecks;
   PresetChecks;
+  SlimeChecks;
+  SlimeMotionChecks;
+  StartupStateChecks;
   if (ParamCount >= 2) and SameText(ParamStr(2), 'animation') then CreateMotionPreview;
 
   TFile.WriteAllText(TPath.Combine(OutputDir, 'checks.txt'),

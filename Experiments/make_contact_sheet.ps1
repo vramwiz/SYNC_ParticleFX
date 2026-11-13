@@ -1,13 +1,21 @@
-﻿param([string]$PreviewDirectory)
+﻿param([string]$PreviewDirectory, [switch]$StartupOnly)
 
 # 実験出力の透過PNGを市松模様へ重ね、目視確認用の一覧を作る。
 $ErrorActionPreference = 'Stop'
 if (-not $PreviewDirectory) { $PreviewDirectory = Join-Path $PSScriptRoot '..\Win64\Experiment\Preview' }
 Add-Type -AssemblyName System.Drawing
 $files = @(Get-ChildItem -LiteralPath $PreviewDirectory -Filter '*.png' -File |
-    Where-Object Name -ne 'contact_sheet.png' | Sort-Object Name)
+    Where-Object Name -notin @('contact_sheet.png', 'startup_state.png') | Sort-Object Name)
+if ($StartupOnly) {
+    $files = @(foreach ($kind in @('rain', 'snow', 'slime')) {
+        foreach ($state in @(0, 50, 100)) {
+            Get-Item -LiteralPath (Join-Path $PreviewDirectory ('startup_{0}_{1:D3}.png' -f $kind, $state))
+        }
+    })
+}
 $tileWidth = 400
 $tileHeight = 225
+if ($StartupOnly) { $tileWidth = 320; $tileHeight = 180 }
 $headerHeight = 28
 $gap = 12
 $columns = 3
@@ -34,7 +42,9 @@ try {
         try { $graphics.DrawImage($sourceImage, [int]$originX, [int]($originY + $headerHeight), $tileWidth, $tileHeight) }
         finally { $sourceImage.Dispose() }
     }
-    $outputPath = Join-Path $PreviewDirectory 'contact_sheet.png'
+    $outputName = 'contact_sheet.png'
+    if ($StartupOnly) { $outputName = 'startup_state.png' }
+    $outputPath = Join-Path $PreviewDirectory $outputName
     $sheet.Save($outputPath, [Drawing.Imaging.ImageFormat]::Png)
     Write-Output ([IO.Path]::GetFullPath($outputPath))
 }

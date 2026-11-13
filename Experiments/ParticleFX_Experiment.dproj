@@ -26,6 +26,7 @@
         <DCCReference Include="..\Source\Common\ParticleFX_Types.pas"/>
         <DCCReference Include="..\Source\Common\ParticleFX_Collision.pas"/>
         <DCCReference Include="..\Source\Common\ParticleFX_Simulation.pas"/>
+        <DCCReference Include="..\Source\Common\ParticleFX_Viscous.pas"/>
         <DCCReference Include="..\Source\Common\ParticleFX_Renderer.pas"/>
     </ItemGroup>
     <Import Project="$(BDS)\Bin\CodeGear.Delphi.Targets"/>

@@ -14,14 +14,15 @@ uses
 const
   FX_MAX_PARTICLES = 12000;
   FX_MAX_PIXELS = 16777216;
-  FX_STYLE_COUNT = 11;
+  FX_STYLE_COUNT = 12;
+  FX_PRESET_COUNT = 23;
 
 type
   TFXStyle = (fsRain, fsSnow, fsWater, fsPetal, fsLeaf, fsConfetti,
-    fsSand, fsHail, fsFountain, fsSpark, fsInk);
+    fsSand, fsHail, fsFountain, fsSpark, fsInk, fsSlime);
   TFXEmission = (feContinuous, feShot, feExplosion, feJet);
   TFXShape = (shDrop, shSnow, shPetal, shLeaf, shPaper, shGrain,
-    shHail, shLight, shInk);
+    shHail, shLight, shInk, shSlime);
   TFXVec = record
     X, Y: Double;
   end;
@@ -57,6 +58,13 @@ type
     AccumAmount, MaxThickness, Roughness, MaxSlope, AccumOpacity: Double;
     Melt, FloorPosition, Blur, MotionBlur, Glow, Depth: Double;
     CanvasWidth, CanvasHeight, DrawMode: Integer;
+    Viscosity, Cohesion, Adhesion, DripTime: Double;
+    BottomMargin: Integer;
+    InitialState: Double;
+  end;
+
+  TFXStartupTiming = record
+    ParticleLifetime, FullPrewarm, Prewarm, RampTime: Double;
   end;
 
   TFXVisual = record
@@ -92,7 +100,12 @@ function FXRandom(Index: Int64; Seed, Channel: Cardinal): Double;
 function FXNoise(Position: Double; Seed: Cardinal): Double;
 function FXProfile(Style: TFXStyle): TFXProfile;
 function FXDefaultSettings(Style: TFXStyle): TFXSettings;
-// スタイルへプリセット基準値を適用して返す。外部の設定値を変更しない。
+// 速度・重力・画像サイズから予備動作を求め、開始状態の割合を適用する。
+// 時間補正や風の時刻を変更せず、発生時刻より前の計算量だけを返す。
+function FXStartupTiming(const S: TFXSettings; Width, Height: Integer): TFXStartupTiming;
+// 静的な蓄積の開始進行。100では従来の蓄積量をそのまま使用する。
+function FXStartupAccumulation(Time: Double; const S: TFXSettings; Width, Height: Integer): Double;
+// 素材固有のプリセットはスタイルも切り替え、基準値を返す。外部の値は変更しない。
 function FXPresetSettings(Style: TFXStyle; Preset: Integer): TFXSettings;
 function FXStyleName(Style: TFXStyle): string;
 function FXParticleColor(const S: TFXSettings; Index: Int64): Cardinal;
@@ -221,6 +234,11 @@ begin
       Result.Gravity := 300; Result.BaseAngle := 90;
       Result.Color := $6F54CC; Result.Life := 5;
     end;
+    fsSlime: begin
+      Result.Shape := shSlime; Result.Rate := 120; Result.Speed := 150;
+      Result.Size := 7; Result.Gravity := 160; Result.Drag := 0.6;
+      Result.Color := $65C845; Result.Life := 14;
+    end;
   end;
 end;
 
@@ -253,10 +271,76 @@ begin
   Result.MaxSlope := 55; Result.AccumOpacity := 1;
   Result.FloorPosition := 95; Result.MotionBlur := 0.35; Result.Depth := 0.5;
   Result.Blur := 0.6; Result.ColorVariation := 0.15;
+  Result.Viscosity := 0.7; Result.Cohesion := 0.75;
+  Result.Adhesion := 0.8; Result.DripTime := 1.2;
+  Result.InitialState := 100;
+end;
+
+function FXStartupTiming(const S: TFXSettings; Width, Height: Integer): TFXStartupTiming;
+var
+  D: TFXVec;
+  Distance, MinimumSpeed, Acceleration, ToLimit, LimitDistance, TravelTime, Automatic: Double;
+begin
+  Result := Default(TFXStartupTiming);
+  Result.ParticleLifetime := S.Lifetime;
+  Automatic := 0;
+  if S.Emission = feContinuous then
+  begin
+    if S.Style = fsSlime then
+      Automatic := Min(S.Lifetime, Min(8.0, Height / Max(40.0, S.Speed) + 2))
+    else begin
+      // 従来の自動予備動作と寿命の計算を共有し、100の表示を維持する。
+      D := FXDirection(S.Angle);
+      Distance := Abs(D.X) * Width + Abs(D.Y) * Height + S.Size * 8;
+      MinimumSpeed := Min(S.MaxSpeed, Max(5.0, S.Speed *
+        (1 - S.Depth * 0.65) * (1 - S.SpeedVariation * 0.5)));
+      MinimumSpeed := MinimumSpeed / (1 + S.Drag * 2);
+      Acceleration := Max(0.0, FXDot(FXDirection(S.GravityAngle), D) * S.Gravity +
+        FXDot(FXDirection(S.WindAngle), D) * S.Wind);
+      if Acceleration > 0.01 then
+      begin
+        ToLimit := Max(0.0, (S.MaxSpeed - MinimumSpeed) / Acceleration);
+        LimitDistance := MinimumSpeed * ToLimit + 0.5 * Acceleration * Sqr(ToLimit);
+        if Distance > LimitDistance then TravelTime := ToLimit + (Distance - LimitDistance) / S.MaxSpeed
+        else TravelTime := 2 * Distance / (Sqrt(Sqr(MinimumSpeed) + 2 * Acceleration * Distance) + MinimumSpeed);
+      end else TravelTime := Distance / MinimumSpeed;
+      TravelTime := Min(30.0, TravelTime * 1.2);
+      if S.AutomaticLifetime then Result.ParticleLifetime := Max(Result.ParticleLifetime, TravelTime);
+      Automatic := Min(Result.ParticleLifetime * 1.16, TravelTime);
+    end;
+    if S.Prewarm > 0 then Result.FullPrewarm := S.Prewarm
+    else if S.Prewarm = 0 then Result.FullPrewarm := Automatic;
+  end;
+  if S.InitialState >= 100 then Result.Prewarm := Result.FullPrewarm
+  else Result.Prewarm := Result.FullPrewarm * (EnsureRange(S.InitialState, 0.0, 100.0) / 100);
+  Result.RampTime := Max(0.1, Result.FullPrewarm);
+  if Result.FullPrewarm <= 0 then Result.RampTime := Max(0.1, Automatic);
+  if (Result.FullPrewarm <= 0) and (Automatic <= 0) then Result.RampTime := Max(0.1, S.Lifetime);
+end;
+
+function FXStartupAccumulation(Time: Double; const S: TFXSettings; Width, Height: Integer): Double;
+var
+  Timing: TFXStartupTiming;
+begin
+  if S.InitialState >= 100 then Exit(1);
+  if (S.StartTime > 0) and (Time < S.StartTime) then Exit(0);
+  Timing := FXStartupTiming(S, Width, Height);
+  Result := EnsureRange(EnsureRange(S.InitialState, 0.0, 100.0) / 100 +
+    (Time - S.StartTime) / Timing.RampTime, 0.0, 1.0);
 end;
 
 function FXPresetSettings(Style: TFXStyle; Preset: Integer): TFXSettings;
 begin
+  // 素材を指定する名前では、直前のスタイルに依存せず同じ素材を選ぶ。
+  // 量・風・無重力などの共通プリセットは、現在の素材を引き継ぐ。
+  case Preset of
+    7: Style := fsSnow;
+    11, 12: Style := fsWater;
+    13..15: Style := fsFountain;
+    17, 18: Style := fsSpark;
+    19: Style := fsSand;
+    20..22: Style := fsSlime;
+  end;
   Result := FXDefaultSettings(Style);
   // ボタン適用・実験用の値を生成する。毎フレームの描画設定へ重ねて適用しない。
   case Preset of
@@ -287,13 +371,17 @@ begin
     end;
     19: begin Result.Angle := 90; Result.Gravity := 0; Result.Wind := 220;
       Result.Rate := Result.Rate * 3; Result.Turbulence := 30; end;
+    21: begin Result.Viscosity := 0.12; Result.Cohesion := 0.35;
+      Result.Adhesion := 0.3; Result.DripTime := 0.35; Result.Speed := 220; end;
+    22: begin Result.Viscosity := 0.95; Result.Cohesion := 0.95;
+      Result.Adhesion := 0.95; Result.DripTime := 2.4; Result.Drag := 1.2; end;
   end;
 end;
 
 function FXStyleName(Style: TFXStyle): string;
 const
   Names: array[TFXStyle] of string = ('雨', '雪', '水をかける', '花びら',
-    '落ち葉', '紙吹雪', '砂', 'ひょう', '噴水', '光の粒・爆発', 'インク');
+    '落ち葉', '紙吹雪', '砂', 'ひょう', '噴水', '光の粒・爆発', 'インク', 'スライム');
 begin
   Result := Names[Style];
 end;

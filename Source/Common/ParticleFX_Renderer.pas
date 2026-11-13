@@ -5,14 +5,18 @@
 
 // Direct2Dで透過WIC面へ描き、PBGRAからストレートRGBAへ合成する。
 // 元画像・接触マスク・透過描画面を分離し、入力バッファは変更しない。
+// 粘性粒子は密度場で面をつなぎ、同じRGBA合成と下余白へ接続する。
 
 interface
 
 uses
   Winapi.D2D1, Winapi.Wincodec, ParticleFX_Types, ParticleFX_Collision,
-  ParticleFX_Simulation;
+  ParticleFX_Simulation, ParticleFX_Viscous;
 
 type
+  TFXFluidCell = record
+    Density, R, G, B: Single;
+  end;
   TFXRenderStats = record
     VisibleParticles, Contacts, SimulatedSteps, Surfaces: Integer;
     ContourRevision: Integer;
@@ -31,8 +35,12 @@ type
     FPetal, FLeaf, FAccumulation, FAccumEdge: ID2D1PathGeometry;
     FEnvironment: TFXEnvironment;
     FSimulator: TFXSimulator;
+    FViscous: TFXViscousFlow;
     FVisuals: TFXVisualList;
     FOverlay: TArray<Byte>;
+    FFluidField: TArray<TFXFluidCell>;
+    FExpandedInput: TFXPixels;
+    FOutputWidth, FOutputHeight: Integer;
     FWidth, FHeight, FAccumRevision: Integer;
     FSoftColor: Cardinal;
     FMTACookie: Pointer;
@@ -45,6 +53,7 @@ type
     procedure DrawVisual(const V: TFXVisual; const S: TFXSettings);
     procedure BuildAccumulation;
     procedure DrawAccumulation(const S: TFXSettings);
+    procedure DrawViscousField(const S: TFXSettings);
     procedure Composite(const Input: TFXPixels; out Output: TFXPixels; ClearInput: Boolean);
   public
     constructor Create;
@@ -54,6 +63,8 @@ type
     procedure Render(const Input: TFXPixels; Width, Height: Integer;
       Time: Double; const Settings: TFXSettings; out Output: TFXPixels);
     property Stats: TFXRenderStats read FStats;
+    property OutputWidth: Integer read FOutputWidth;
+    property OutputHeight: Integer read FOutputHeight;
   end;
 
 implementation
@@ -81,7 +92,7 @@ end;
 destructor TFXRenderer.Destroy;
 begin
   ResetGraphics;
-  FVisuals.Free; FSimulator.Free; FEnvironment.Free;
+  FViscous.Free; FVisuals.Free; FSimulator.Free; FEnvironment.Free;
   if FMTACookie <> nil then FXCoDecrementMTAUsage(FMTACookie);
   inherited;
 end;
@@ -380,19 +391,104 @@ begin
   end;
 end;
 
+procedure TFXRenderer.DrawViscousField(const S: TFXSettings);
+var
+  FW, FH, I, X, Y, X0, X1, Y0, Y1, IX, IY, PX, PY, A: Integer;
+  V: TFXVisual;
+  R, RX, RY, DX, DY, CS, SN, Q, W, Extent, Density, Cover, Light, Shine,
+    Red, Green, Blue, FX, FY, TX, TY, NX, NY: Double;
+  C, C00, C10, C01, C11: TFXFluidCell;
+  function Mix(A, B, C, D: Single): Double;
+  begin
+    Result := (A * (1 - TX) + B * TX) * (1 - TY) + (C * (1 - TX) + D * TX) * TY;
+  end;
+begin
+  // 半解像度の密度場へ粒を加算し、等密度面で一つの液体として描く。
+  // 粒の重なりに輪郭線を残さず、透明な細い首や滴下をつなぐ。
+  FW := (FWidth + 1) div 2; FH := (FHeight + 1) div 2;
+  SetLength(FFluidField, FW * FH);
+  FillChar(FFluidField[0], Length(FFluidField) * SizeOf(TFXFluidCell), 0);
+  for I := 0 to FVisuals.Count - 1 do
+  begin
+    V := FVisuals[I];
+    if (V.Opacity <= 0) or ((S.DrawMode = 2) and not V.IsSplash) then Continue;
+    R := Max(1.2, V.Size * (1.25 + S.Cohesion * 0.5));
+    RX := R; RY := R * V.Aspect; Extent := Max(RX, RY);
+    X0 := Max(0, Floor((V.Position.X - Extent) * 0.5));
+    X1 := Min(FW - 1, Ceil((V.Position.X + Extent) * 0.5));
+    Y0 := Max(0, Floor((V.Position.Y - Extent) * 0.5));
+    Y1 := Min(FH - 1, Ceil((V.Position.Y + Extent) * 0.5));
+    CS := Cos(V.Angle); SN := Sin(V.Angle);
+    for Y := Y0 to Y1 do
+      for X := X0 to X1 do
+      begin
+        DX := X * 2 + 1 - V.Position.X; DY := Y * 2 + 1 - V.Position.Y;
+        Q := Sqr((DX * CS + DY * SN) / RX) + Sqr((-DX * SN + DY * CS) / RY);
+        if Q >= 1 then Continue;
+        W := Sqr(1 - Q) * 2.0 * V.Opacity;
+        C := FFluidField[Y * FW + X];
+        C.Density := C.Density + W;
+        C.R := C.R + ((V.Color shr 16) and 255) * W;
+        C.G := C.G + ((V.Color shr 8) and 255) * W;
+        C.B := C.B + (V.Color and 255) * W;
+        FFluidField[Y * FW + X] := C;
+      end;
+  end;
+  for Y := 0 to FHeight - 1 do
+    for X := 0 to FWidth - 1 do
+    begin
+      FX := Max(0.0, (X - 0.5) * 0.5); FY := Max(0.0, (Y - 0.5) * 0.5);
+      IX := Min(FW - 1, Floor(FX)); IY := Min(FH - 1, Floor(FY));
+      PX := Min(FW - 1, IX + 1); PY := Min(FH - 1, IY + 1);
+      TX := FX - IX; TY := FY - IY;
+      C00 := FFluidField[IY * FW + IX]; C10 := FFluidField[IY * FW + PX];
+      C01 := FFluidField[PY * FW + IX]; C11 := FFluidField[PY * FW + PX];
+      Density := Mix(C00.Density, C10.Density, C01.Density, C11.Density);
+      if Density <= 0.25 then Continue;
+      Cover := EnsureRange((Density - 0.25) / 0.35, 0.0, 1.0);
+      Cover := Cover * Cover * (3 - 2 * Cover);
+      NX := C10.Density - C00.Density; NY := C01.Density - C00.Density;
+      W := 1 / (1 + Sqr(Density));
+      Light := EnsureRange(0.9 - (NX + NY) * W * 0.2, 0.75, 1.12);
+      Shine := Sqr(Max(0.0, Min(1.0, (NX + NY) * 0.7))) * 80 * W;
+      Red := Min(255.0, Mix(C00.R, C10.R, C01.R, C11.R) / Density * Light + Shine);
+      Green := Min(255.0, Mix(C00.G, C10.G, C01.G, C11.G) / Density * Light + Shine);
+      Blue := Min(255.0, Mix(C00.B, C10.B, C01.B, C11.B) / Density * Light + Shine);
+      A := EnsureRange(Round(Cover * S.Opacity * 255), 0, 255);
+      I := (Y * FWidth + X) * 4;
+      FOverlay[I] := Round(Blue * A / 255); FOverlay[I + 1] := Round(Green * A / 255);
+      FOverlay[I + 2] := Round(Red * A / 255); FOverlay[I + 3] := A;
+    end;
+end;
+
 procedure TFXRenderer.Render(const Input: TFXPixels; Width, Height: Integer;
   Time: Double; const Settings: TFXSettings; out Output: TFXPixels);
 var
-  I: Integer;
+  I, SourceHeight: Integer;
+  RenderInput: TFXPixels;
   ComResult, DrawResult: HRESULT;
   PhaseTimer: TStopwatch;
 begin
+  if (Width <= 0) or (Height <= 0) or (Width > 8192) or (Height > 8192) or
+    (Int64(Width) * Height > FX_MAX_PIXELS) or
+    (Length(Input) <> Width * Height) then
+    raise EArgumentException.Create('パーティクル演出の画像サイズが不正です。');
+  SourceHeight := Height;
+  Height := Height + EnsureRange(Settings.BottomMargin, 0, Min(8192 - Height, FX_MAX_PIXELS div Width - Height));
+  RenderInput := Input;
+  if Height <> SourceHeight then
+  begin
+    SetLength(FExpandedInput, Width * Height);
+    Move(Input[0], FExpandedInput[0], Length(Input) * SizeOf(TFXPixelRGBA));
+    FillChar(FExpandedInput[Length(Input)], (Length(FExpandedInput) - Length(Input)) * SizeOf(TFXPixelRGBA), 0);
+    RenderInput := FExpandedInput;
+  end;
   if IsNan(Time) or IsInfinite(Time) then Time := 0;
   Time := EnsureRange(Time, -1000000.0, 1000000.0);
   ComResult := CoInitializeEx(nil, COINIT_MULTITHREADED);
   try
     PhaseTimer := TStopwatch.StartNew;
-    FEnvironment.Prepare(Input, Width, Height, Settings, Time + Settings.Offset);
+    FEnvironment.Prepare(RenderInput, Width, Height, Settings, Time + Settings.Offset, SourceHeight);
     FStats.MaskMS := PhaseTimer.ElapsedTicks * 1000 / TStopwatch.Frequency;
     PhaseTimer := TStopwatch.StartNew;
     try
@@ -404,16 +500,23 @@ begin
     end;
     FStats.ResourceMS := PhaseTimer.ElapsedTicks * 1000 / TStopwatch.Frequency;
     PhaseTimer := TStopwatch.StartNew;
-    FSimulator.Generate(Time, Settings, FEnvironment, FVisuals);
+    if Settings.Style = fsSlime then
+    begin
+      if FViscous = nil then FViscous := TFXViscousFlow.Create(FSimulator);
+      FViscous.Generate(Time, Settings, FEnvironment, FVisuals);
+    end else FSimulator.Generate(Time, Settings, FEnvironment, FVisuals);
     FStats.SimulationMS := PhaseTimer.ElapsedTicks * 1000 / TStopwatch.Frequency;
     PhaseTimer := TStopwatch.StartNew;
     FTarget.BeginDraw;
     try
       FTarget.SetTransform(TD2D1Matrix3x2F.Identity);
       FTarget.Clear(D2D1ColorF(0, 0, 0, 0));
-      DrawAccumulation(Settings);
-      for I := 0 to FVisuals.Count - 1 do
-        if (Settings.DrawMode <> 2) or FVisuals[I].IsSplash then DrawVisual(FVisuals[I], Settings);
+      if Settings.Style <> fsSlime then
+      begin
+        DrawAccumulation(Settings);
+        for I := 0 to FVisuals.Count - 1 do
+          if (Settings.DrawMode <> 2) or FVisuals[I].IsSplash then DrawVisual(FVisuals[I], Settings);
+      end;
     finally
       DrawResult := FTarget.EndDraw;
     end;
@@ -421,10 +524,16 @@ begin
     FStats.DrawingMS := PhaseTimer.ElapsedTicks * 1000 / TStopwatch.Frequency;
     PhaseTimer := TStopwatch.StartNew;
     OleCheck(FBitmap.CopyPixels(nil, Width * 4, Length(FOverlay), @FOverlay[0]));
-    Composite(Input, Output, Settings.DrawMode = 1);
+    if Settings.Style = fsSlime then DrawViscousField(Settings);
+    Composite(RenderInput, Output, Settings.DrawMode = 1);
+    FOutputWidth := Width; FOutputHeight := Height;
     FStats.CompositeMS := PhaseTimer.ElapsedTicks * 1000 / TStopwatch.Frequency;
     FStats.VisibleParticles := FVisuals.Count; FStats.Contacts := FSimulator.CollisionCount;
     FStats.SimulatedSteps := FSimulator.SimulatedSteps; FStats.Surfaces := FEnvironment.SurfaceCount;
+    if Settings.Style = fsSlime then
+    begin
+      FStats.Contacts := FViscous.Contacts; FStats.SimulatedSteps := FViscous.SimulatedSteps;
+    end;
     FStats.ContourRevision := FEnvironment.Revision;
   finally
     // MTAは所有cookieで生存させる。外部STAで作成した資源はその呼出内で解放する。

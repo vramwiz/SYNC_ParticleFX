@@ -3,7 +3,7 @@
     "id": "VRAMWIZ.SYNC_ParticleFX",
     "name": "パーティクル演出",
     "type": "フィルタプラグイン",
-    "summary": "雨・雪・水しぶきと画像輪郭への衝突・付着・蓄積を描画",
+    "summary": "雨・雪・水しぶき・粘性スライムと画像輪郭への衝突・付着・蓄積を描画",
     "description": "https://raw.githubusercontent.com/vramwiz/SYNC_ParticleFX/refs/heads/main/README.md",
     "author": "VRAMの魔術師",
     "repoURL": "https://github.com/vramwiz/SYNC_ParticleFX/",
@@ -25,6 +25,7 @@
       "雨",
       "雪",
       "水しぶき",
+      "スライム",
       "アニメーション"
     ],
     "dependencies": [],

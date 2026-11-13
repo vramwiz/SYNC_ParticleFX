@@ -98,6 +98,7 @@ if exist "$(OUTPUTDIR)$(PROJECTNAME).rsm" del /Q "$(OUTPUTDIR)$(PROJECTNAME).rsm
         <DCCReference Include="Source\Common\ParticleFX_Types.pas"/>
         <DCCReference Include="Source\Common\ParticleFX_Collision.pas"/>
         <DCCReference Include="Source\Common\ParticleFX_Simulation.pas"/>
+        <DCCReference Include="Source\Common\ParticleFX_Viscous.pas"/>
         <DCCReference Include="Source\Common\ParticleFX_Renderer.pas"/>
         <DCCReference Include="Source\Plugin\Filter\ParticleFX_Parameters.pas"/>
         <DCCReference Include="Source\Plugin\Filter\SYNC_ParticleFX_FilterPlugin.pas"/>

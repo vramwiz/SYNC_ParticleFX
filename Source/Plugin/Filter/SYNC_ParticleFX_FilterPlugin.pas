@@ -61,7 +61,8 @@ end;
 procedure TParticleFXSession.Render(Video: PFILTER_PROC_VIDEO);
 var
   S: TFXSettings;
-  Width, Height: Integer;
+  Width, Height, OutputWidth, OutputHeight: Integer;
+  OriginalCY: Single;
 begin
   if not Assigned(Video^.SetImageData) then Exit;
   FLock.Acquire;
@@ -84,7 +85,16 @@ begin
     if IsGenerator then FillChar(FInput[0], Length(FInput) * SizeOf(TFXPixelRGBA), 0)
     else Video^.GetImageData(PPIXEL_RGBA(@FInput[0]));
     FRenderer.Render(FInput, Width, Height, Video^.Object_^.Time, S, FOutput);
-    if Length(FOutput) = Width * Height then Video^.SetImageData(PPIXEL_RGBA(@FOutput[0]), Width, Height);
+    OutputWidth := FRenderer.OutputWidth; OutputHeight := FRenderer.OutputHeight;
+    OriginalCY := 0;
+    if Video^.Param <> nil then OriginalCY := Video^.Param^.CY;
+    if Length(FOutput) = OutputWidth * OutputHeight then
+    begin
+      Video^.SetImageData(PPIXEL_RGBA(@FOutput[0]), OutputWidth, OutputHeight);
+      // 下だけの拡張で元画像が上へずれないよう、画像中心の差分を補正する。
+      if (Video^.Param <> nil) and (OutputHeight <> Height) then
+        Video^.Param^.CY := OriginalCY - (OutputHeight - Height) * 0.5;
+    end;
   finally
     FLock.Release;
   end;

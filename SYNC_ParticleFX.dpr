@@ -14,6 +14,7 @@ uses
   ParticleFX_Types in 'Source\Common\ParticleFX_Types.pas',
   ParticleFX_Collision in 'Source\Common\ParticleFX_Collision.pas',
   ParticleFX_Simulation in 'Source\Common\ParticleFX_Simulation.pas',
+  ParticleFX_Viscous in 'Source\Common\ParticleFX_Viscous.pas',
   ParticleFX_Renderer in 'Source\Common\ParticleFX_Renderer.pas',
   ParticleFX_Parameters in 'Source\Plugin\Filter\ParticleFX_Parameters.pas',
   SYNC_ParticleFX_FilterPlugin in 'Source\Plugin\Filter\SYNC_ParticleFX_FilterPlugin.pas';

@@ -20,7 +20,7 @@ type
 
   TFXEnvironment = class
   private
-    FWidth, FHeight, FSolidCount, FRevision: Integer;
+    FWidth, FHeight, FSourceHeight, FSolidCount, FRevision: Integer;
     FMask, FAccumMask: TArray<Byte>;
     FSurfaces: TArray<TFXSurface>;
     FSurfaceCount: Integer;
@@ -41,12 +41,18 @@ type
     // 入力はストレートRGBA。バッファを保持・変更せず、二値マスクだけを複製する。
     // 蓄積は量と現在時刻から作り、入力変更時は輪郭キャッシュを更新する。
     procedure Prepare(const Input: TFXPixels; Width, Height: Integer;
-      const Settings: TFXSettings; Time: Double);
-    // 区間を走査して最初の接触位置と外向き法線を返す。画面外へはアクセスしない。
+      const Settings: TFXSettings; Time: Double; SourceHeight: Integer = 0);
+    // 元のアルファだけを参照する。前面へ滴下した粒子が画像を抜けたか調べる。
+    function ContainsImage(const Position: TFXVec): Boolean;
+    // 区間を走査して最初の接触位置と法線を返す。画面外へはアクセスしない。
+    // 輪郭追従ではPreserveNormalを指定し、面から離れる移動を接触させない。
     function Trace(const A, B: TFXVec; Radius: Double;
-      out HitPosition, Normal: TFXVec; out Fraction: Double): Boolean;
+      out HitPosition, Normal: TFXVec; out Fraction: Double;
+      PreserveNormal: Boolean = False): Boolean;
     property Width: Integer read FWidth;
     property Height: Integer read FHeight;
+    property SourceHeight: Integer read FSourceHeight;
+    property FloorY: Double read FFloorY;
     property Revision: Integer read FRevision;
     property SurfaceCount: Integer read FSurfaceCount;
     property Surfaces[Index: Integer]: TFXSurface read GetSurface;
@@ -95,10 +101,10 @@ begin
 end;
 
 procedure TFXEnvironment.Prepare(const Input: TFXPixels; Width, Height: Integer;
-  const Settings: TFXSettings; Time: Double);
+  const Settings: TFXSettings; Time: Double; SourceHeight: Integer);
 var
   I, Count: Integer;
-  Changed: Boolean;
+  Changed, StaticAccumulation: Boolean;
   Occupied: Byte;
   Amount: Double;
 begin
@@ -106,8 +112,11 @@ begin
     (Length(Input) <> Width * Height) then
     raise EArgumentException.Create('パーティクル演出の画像サイズが不正です。');
   Count := Width * Height;
-  Changed := not FPrepared or (FWidth <> Width) or (FHeight <> Height);
+  if SourceHeight <= 0 then SourceHeight := Height;
+  Changed := not FPrepared or (FWidth <> Width) or (FHeight <> Height) or
+    (FSourceHeight <> SourceHeight);
   FWidth := Width; FHeight := Height;
+  FSourceHeight := SourceHeight;
   if Length(FMask) <> Count then
   begin
     SetLength(FMask, Count);
@@ -122,19 +131,27 @@ begin
     Inc(FSolidCount, Occupied);
   end;
   Amount := EnsureRange(Settings.AccumAmount - Max(0.0, Time) * Settings.Melt, 0.0, 100.0);
+  StaticAccumulation := Settings.Accumulation and (Settings.MaxThickness > 0) and
+    (Settings.Style in [fsSnow, fsPetal, fsLeaf, fsConfetti, fsSand, fsHail, fsInk]);
+  // 粘性の付着は粒子の履歴から生まれるため、静的な蓄積だけを進行に合わせる。
+  if StaticAccumulation and (Settings.InitialState < 100) then
+    Amount := Amount * FXStartupAccumulation(Time, Settings, Width, Height);
   if not Changed and CompareMem(@FSettings, @Settings, SizeOf(Settings)) and
     (FLastAmount = Amount) then Exit;
   FSettings := Settings;
   Inc(FRevision);
   FLastAmount := Amount;
   FFloorEnabled := Settings.FloorEnabled;
-  FFloorY := EnsureRange(Settings.FloorPosition / 100 * Height, 0.0, Height - 1.0);
+  FFloorY := EnsureRange(Settings.FloorPosition / 100 * FSourceHeight, 0.0, Height - 1.0);
   FillChar(FAccumMask[0], Count, 0);
   FSurfaceCount := 0;
-  if Settings.Accumulation and (Amount > 0) and (Settings.MaxThickness > 0) and
-    (Settings.Style in [fsSnow, fsPetal, fsLeaf, fsConfetti, fsSand, fsHail, fsInk]) then
-    BuildSurfaces(Settings, Amount);
+  if StaticAccumulation and (Amount > 0) then BuildSurfaces(Settings, Amount);
   FPrepared := True;
+end;
+
+function TFXEnvironment.ContainsImage(const Position: TFXVec): Boolean;
+begin
+  Result := OriginalSolid(Round(Position.X), Round(Position.Y));
 end;
 
 procedure TFXEnvironment.AddSurface(const Position, Normal: TFXVec; Thickness: Double;
@@ -271,14 +288,16 @@ begin
 end;
 
 function TFXEnvironment.Trace(const A, B: TFXVec; Radius: Double;
-  out HitPosition, Normal: TFXVec; out Fraction: Double): Boolean;
+  out HitPosition, Normal: TFXVec; out Fraction: Double; PreserveNormal: Boolean): Boolean;
 var
-  D, Direction, Perpendicular, Probe: TFXVec;
-  Steps, I, J, X, Y: Integer;
+  D, Direction, Perpendicular, Probe, SurfaceProbe, Fallback: TFXVec;
+  Steps, I, J, K, ProbeSteps, X, Y: Integer;
   Offset: Double;
 begin
   Result := False;
   if not HasObstacles then Exit;
+  // 内側からの支持面探索で、その始点を新しい表面として返さない。
+  if PreserveNormal and Solid(Round(A.X), Round(A.Y)) then Exit;
   if ((A.X < -Radius) and (B.X < -Radius)) or
     ((A.X >= FWidth + Radius) and (B.X >= FWidth + Radius)) or
     ((A.Y < -Radius) and (B.Y < -Radius)) or
@@ -298,9 +317,30 @@ begin
         HitPosition.Y + Direction.Y * Radius + Perpendicular.Y * Offset);
       X := Round(Probe.X); Y := Round(Probe.Y);
       if not Solid(X, Y) then Continue;
-      Normal := NormalAt(X, Y, FXVec(-Direction.X, -Direction.Y), True);
-      // 接触法線が速度と同じ側を向く曖昧な内側判定を補正する。
-      if FXDot(Normal, Direction) > 0 then Normal := FXVec(-Normal.X, -Normal.Y);
+      Fallback := FXVec(-Direction.X, -Direction.Y);
+      if PreserveNormal then
+      begin
+        // 半径の先端は画像の奥に届くため、そこではなく最初の境界で法線を求める。
+        // 細い輪郭で勾配が取れない場合も、中心へ戻る向きを使い内側へ反転させない。
+        ProbeSteps := Max(1, Ceil(Max(Abs(Probe.X - HitPosition.X), Abs(Probe.Y - HitPosition.Y))));
+        SurfaceProbe := Probe;
+        for K := 0 to ProbeSteps do
+        begin
+          SurfaceProbe := FXVec(HitPosition.X + (Probe.X - HitPosition.X) * K / ProbeSteps,
+            HitPosition.Y + (Probe.Y - HitPosition.Y) * K / ProbeSteps);
+          if Solid(Round(SurfaceProbe.X), Round(SurfaceProbe.Y)) then Break;
+        end;
+        X := Round(SurfaceProbe.X); Y := Round(SurfaceProbe.Y);
+        Fallback := FXNormalize(FXVec(HitPosition.X - SurfaceProbe.X, HitPosition.Y - SurfaceProbe.Y));
+        if FXLength(Fallback) < 0.5 then Fallback := FXVec(-Direction.X, -Direction.Y);
+      end;
+      Normal := NormalAt(X, Y, Fallback, True);
+      if PreserveNormal then
+      begin
+        // 横の探索点が触れていても、実際に面から離れる粒子を引き戻さない。
+        if FXDot(Normal, Direction) > 1E-6 then Continue;
+      end else if FXDot(Normal, Direction) > 0 then
+        Normal := FXVec(-Normal.X, -Normal.Y);
       Exit(True);
     end;
   end;

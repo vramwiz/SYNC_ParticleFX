@@ -113,6 +113,10 @@ type
   PPIXEL_RGBA = ^TPIXEL_RGBA;
 
   TFILTER_PROC_VIDEO_GET_TEX2D = function: Pointer; cdecl;
+  POBJECT_IMAGE_PARAM = ^TOBJECT_IMAGE_PARAM;
+  TOBJECT_IMAGE_PARAM = record
+    X, Y, Z, RX, RY, RZ, SX, SY, SZ, CX, CY, CZ, Alpha: Single;
+  end;
   PFILTER_PROC_VIDEO = ^TFILTER_PROC_VIDEO;
   TFILTER_PROC_VIDEO = record
     Scene: PSCENE_INFO;
@@ -123,7 +127,8 @@ type
     GetFramebufferTexture2D: TFILTER_PROC_VIDEO_GET_TEX2D;
     // SDK 2026/10/10: userdataまでの全ポインタを同じ順序で保持する。
     Edit: PEDIT_SECTION;
-    Param, GetOutputImageParam, GetImageObject, DrawImage, DrawPoly,
+    Param: POBJECT_IMAGE_PARAM;
+    GetOutputImageParam, GetImageObject, DrawImage, DrawPoly,
       SetDefaultAnchor, SetBlendMode, SetMaterialShine, SetSamplerMode,
       SetCullingState, SetBillboardMode, CreateImageResource,
       GetImageResourceTexture2D, CopyImageResource, ClearImageResource,
@@ -181,7 +186,7 @@ type
   PFILTER_ITEM_SELECT = ^TFILTER_ITEM_SELECT;
   TFILTER_ITEM_SELECT_ITEM = record
     Name : LPCWSTR; // GUIに表示する選択肢名。
-    Value: Integer; // 選択時にValueへ格納される識別値。
+    Value: Integer; // プラグイン内部の識別値。編集APIへ設定するときはNameをUTF-8で渡す。
   end;
   TFILTER_ITEM_SELECT = record
     ItemType: LPCWSTR;                   // SDK項目種別の固定値 `select`。

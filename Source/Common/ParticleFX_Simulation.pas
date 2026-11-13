@@ -33,8 +33,6 @@ type
     FRevision: Integer;
     FPrepared: Boolean;
     FSimulatedSteps, FCollisionCount: Integer;
-    function NewParticle(ID: Int64; Birth, Lifetime: Double; const S: TFXSettings;
-      Width, Height: Integer): TFXParticle;
     procedure Advance(var State: TFXCacheEntry; const P: TFXParticle;
       const S: TFXSettings; Environment: TFXEnvironment; Age, DT: Double);
     procedure RenderParticle(const P: TFXParticle; Age: Double;
@@ -42,6 +40,9 @@ type
     procedure ContactVisuals(const P: TFXParticle; const State: TFXCacheEntry;
       Age: Double; const S: TFXSettings; Environment: TFXEnvironment; Output: TFXVisualList);
   public
+    // 共通の発生条件から初期粒子を返す。シミュレーターの履歴は変更しない。
+    function NewParticle(ID: Int64; Birth, Lifetime: Double; const S: TFXSettings;
+      Width, Height: Integer): TFXParticle;
     constructor Create;
     destructor Destroy; override;
     // 任意時刻の描画要素を生成する。Outputの要素を置換し、粒子総数に上限を設ける。
@@ -329,9 +330,8 @@ procedure TFXSimulator.Generate(Time: Double; const Settings: TFXSettings;
   Environment: TFXEnvironment; Output: TFXVisualList);
 var
   I, First, Last, Cycle, FirstCycle, LastCycle, ID, Stride: Int64;
-  Birth, Earliest, Rate, Lifetime, ParticleLifetime, TravelTime, Phase, Age: Double;
-  D: TFXVec;
-  Distance, MinimumSpeed, Acceleration, ToLimit, LimitDistance: Double;
+  Birth, Earliest, Rate, Lifetime, ParticleLifetime, Phase, Age: Double;
+  Timing: TFXStartupTiming;
   Count, Issued: Integer;
   P: TFXParticle;
 begin
@@ -344,27 +344,8 @@ begin
   if FCache.Count > FX_MAX_PARTICLES * 2 then FCache.Clear;
   if (Settings.Opacity <= 0) or (Settings.Rate <= 0) then Exit;
   Time := Time + Settings.Offset;
-  ParticleLifetime := Settings.Lifetime;
-  TravelTime := 0;
-  if Settings.Emission = feContinuous then
-  begin
-    D := FXDirection(Settings.Angle);
-    Distance := Abs(D.X) * Environment.Width + Abs(D.Y) * Environment.Height + Settings.Size * 8;
-    MinimumSpeed := Min(Settings.MaxSpeed, Max(5.0, Settings.Speed *
-      (1 - Settings.Depth * 0.65) * (1 - Settings.SpeedVariation * 0.5)));
-    MinimumSpeed := MinimumSpeed / (1 + Settings.Drag * 2);
-    Acceleration := Max(0.0, FXDot(FXDirection(Settings.GravityAngle), D) * Settings.Gravity +
-      FXDot(FXDirection(Settings.WindAngle), D) * Settings.Wind);
-    if Acceleration > 0.01 then
-    begin
-      ToLimit := Max(0.0, (Settings.MaxSpeed - MinimumSpeed) / Acceleration);
-      LimitDistance := MinimumSpeed * ToLimit + 0.5 * Acceleration * Sqr(ToLimit);
-      if Distance > LimitDistance then TravelTime := ToLimit + (Distance - LimitDistance) / Settings.MaxSpeed
-      else TravelTime := 2 * Distance / (Sqrt(Sqr(MinimumSpeed) + 2 * Acceleration * Distance) + MinimumSpeed);
-    end else TravelTime := Distance / MinimumSpeed;
-    TravelTime := Min(30.0, TravelTime * 1.2);
-    if Settings.AutomaticLifetime then ParticleLifetime := Max(ParticleLifetime, TravelTime);
-  end;
+  Timing := FXStartupTiming(Settings, Environment.Width, Environment.Height);
+  ParticleLifetime := Timing.ParticleLifetime;
   Lifetime := ParticleLifetime * 1.16;
   Issued := 0;
   if Settings.Emission in [feShot, feExplosion] then
@@ -384,7 +365,7 @@ begin
       begin
         if Issued >= FX_MAX_PARTICLES then Exit;
         ID := Cycle * FX_MAX_PARTICLES + I;
-        P := NewParticle(ID, Birth, ParticleLifetime, Settings, Environment.Width, Environment.Height);
+        P := NewParticle(ID, Birth, ParticleLifetime, Settings, Environment.Width, Environment.SourceHeight);
         RenderParticle(P, Time - Birth, Settings, Environment, Output);
         Inc(Issued);
       end;
@@ -392,12 +373,8 @@ begin
     Exit;
   end;
   Rate := Max(0.01, Settings.Rate);
-  Earliest := Settings.StartTime;
-  if (Settings.Emission = feContinuous) and (Settings.StartTime = 0) then
-  begin
-    if Settings.Prewarm = 0 then Earliest := Earliest - Min(Lifetime, TravelTime)
-    else if Settings.Prewarm > 0 then Earliest := Earliest - Settings.Prewarm;
-  end;
+  if (Settings.StartTime > 0) and (Time < Settings.StartTime) then Exit;
+  Earliest := Settings.StartTime - Timing.Prewarm;
   if Time < Earliest then Exit;
   First := Floor((Max(Earliest, Time - Lifetime) - Settings.StartTime) * Rate) - 1;
   Last := Floor((Time - Settings.StartTime) * Rate);
@@ -415,7 +392,7 @@ begin
     end;
     Age := Time - Birth;
     if (Age < 0) or (Age > Lifetime) then Continue;
-    P := NewParticle(I, Birth, ParticleLifetime, Settings, Environment.Width, Environment.Height);
+    P := NewParticle(I, Birth, ParticleLifetime, Settings, Environment.Width, Environment.SourceHeight);
     RenderParticle(P, Age, Settings, Environment, Output);
     Inc(Issued);
     if Issued >= FX_MAX_PARTICLES then Break;

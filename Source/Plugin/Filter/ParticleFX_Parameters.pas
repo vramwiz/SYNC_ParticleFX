@@ -30,14 +30,14 @@ type
     trOpacity, trThreshold, trBounce, trSplash, trSplashSpeed, trContactLife,
     trSlide, trAccumAmount, trThickness, trRoughness, trSlope, trAccumOpacity,
     trMelt, trFloor, trBlur, trMotionBlur, trGlow, trDepth, trWidth, trHeight,
-    trPrewarm);
+    trPrewarm, trViscosity, trCohesion, trAdhesion, trDripTime, trMargin, trInitialState);
   TSelect = (slStyle, slPreset, slEmission, slResponse, slAccumShape, slDrawMode);
   TCheck = (ckCollision, ckAccumulation, ckFloor, ckColor, ckAccumColor, ckAutoEmitter);
 
 var
   Tracks: array[TTrack] of TFILTER_ITEM_TRACK;
   Selects: array[TSelect] of TFILTER_ITEM_SELECT;
-  Options: array[TSelect, 0..21] of TFILTER_ITEM_SELECT_ITEM;
+  Options: array[TSelect, 0..FX_PRESET_COUNT] of TFILTER_ITEM_SELECT_ITEM;
   Checks: array[TCheck] of TFILTER_ITEM_CHECK;
   Groups, GroupEnds: array[0..6] of TFILTER_ITEM_GROUP;
   ParticleColor, AccumColor: TFILTER_ITEM_COLOR;
@@ -65,20 +65,40 @@ var
     Tracks[TrackItem].Value := Number;
   end;
 
+  procedure SetSelect(SelectItem: TSelect; Number: Integer);
+  var
+    I: Integer;
+  begin
+    // SDK内部のValueは数値だが、編集APIは保存形式と同じ選択肢名を受け取る。
+    // 配列のインデックスと数値IDが一致する前提を置かず、登録済みのValueから引く。
+    for I := Low(Options[SelectItem]) to High(Options[SelectItem]) do
+    begin
+      if Options[SelectItem, I].Name = nil then Break;
+      if Options[SelectItem, I].Value <> Number then Continue;
+      SetItem(Selects[SelectItem].Name, UTF8String(string(Options[SelectItem, I].Name)));
+      Selects[SelectItem].Value := Number;
+      Exit;
+    end;
+    raise ERangeError.CreateFmt('Preset selection was not registered: %s (%d)',
+      [string(Selects[SelectItem].Name), Number]);
+  end;
+
 begin
   if (Edit = nil) or (Obj = nil) or (Effect = nil) then Exit;
   if not Assigned(Edit^.SetObjectItemValue) then Exit;
   try
     // callback2の対象名をそのまま使い、同じフィルターの2個目以降も区別する。
     TargetEffect := Effect;
-    Base := FXDefaultSettings(TFXStyle(EnsureRange(Selects[slStyle].Value, 0, FX_STYLE_COUNT - 1)));
-    Preset := FXPresetSettings(Base.Style, Selects[slPreset].Value);
+    Preset := FXPresetSettings(TFXStyle(EnsureRange(Selects[slStyle].Value, 0, FX_STYLE_COUNT - 1)),
+      Selects[slPreset].Value);
+    Base := FXDefaultSettings(Preset.Style);
+    // 素材の基準も切り替えてから倍率を設定し、雪の数値を雨へ掛けない。
+    SetSelect(slStyle, Ord(Preset.Style));
     Amount := Preset.Rate / Base.Rate * 100;
     SetTrack(trAmount, Amount);
     SetTrack(trSize, Preset.Size / Base.Size * 100);
     SetTrack(trSpeed, Preset.Speed / Base.Speed * 100);
-    SetItem(Selects[slEmission].Name, UTF8String(IntToStr(Ord(Preset.Emission) + 1)));
-    Selects[slEmission].Value := Ord(Preset.Emission) + 1;
+    SetSelect(slEmission, Ord(Preset.Emission) + 1);
     SetTrack(trDuration, Preset.Duration);
     SetTrack(trPeriod, Preset.Period);
     SetTrack(trLife, 0);
@@ -101,7 +121,11 @@ begin
     else SetTrack(trSway, 100);
     SetTrack(trSwaySpeed, Preset.SwaySpeed);
     SetTrack(trGlow, (Preset.Glow - Base.Glow) * 100);
-    // 配置・開始時刻・シード・色・接触・蓄積・描画範囲は個別設定を維持する。
+    SetTrack(trViscosity, Preset.Viscosity * 100);
+    SetTrack(trCohesion, Preset.Cohesion * 100);
+    SetTrack(trAdhesion, Preset.Adhesion * 100);
+    SetTrack(trDripTime, Preset.DripTime);
+    // 配置・開始時刻・開始状態・シード・色・接触・蓄積・描画範囲は個別設定を維持する。
   except
     on E: Exception do
       OutputDebugString(PWideChar('SYNC_ParticleFX preset: ' + E.Message));
@@ -129,98 +153,105 @@ end;
 procedure RegisterParticleFXParameters;
 begin
   Select(slPreset, 'プリセット', ['標準', '小雨・少量', '豪雨・大量', '横殴り・横風',
-    '暴風雨・吹雪', '嵐・猛吹雪', '霧雨・粉雪', 'ぼたん雪', '風に流される',
+    '暴風雨・吹雪', '嵐・猛吹雪', '霧雨・粉雪', '牡丹雪', '風に流される',
     '舞い上がる', '渦巻き・竜巻', 'バケツ', '強い水流', 'シャワー',
-    '間欠噴出', '連続噴射', '無重力', '全方向放射', '爆発', '砂嵐']);
-  AddButton(PresetButton, 'プリセット適用', ApplyPresetButton);
+    '間欠噴出', '連続噴射', '無重力', '全方向放射', '爆発', '砂嵐',
+    'スライム', 'さらさら', 'ねばねば']);
+  AddButton(PresetButton, '適用', ApplyPresetButton);
   Select(slStyle, 'スタイル', ['雨', '雪', '水をかける', '花びら', '落ち葉',
-    '紙吹雪', '砂', 'ひょう', '噴水', '光の粒・爆発', 'インク']);
-  Track(trAmount, '発生量(%)', 100, 0, 1000);
-  Track(trSize, '粒子サイズ(%)', 100, 1, 1000);
-  Track(trSpeed, '初速度(%)', 100, 0, 1000);
-  Track(trSeed, 'ランダムシード', 1, 0, 1000000);
-  Track(trOffset, '時間オフセット(秒)', 0, -3600, 3600, 0.01);
+    '紙吹雪', '砂', 'ひょう', '噴水', '光の粒', 'インク', 'スライム']);
+  Track(trAmount, '発生量', 100, 0, 1000);
+  Track(trSize, 'サイズ', 100, 1, 1000);
+  Track(trSpeed, '初速度', 100, 0, 1000);
+  Track(trSeed, 'シード', 1, 0, 1000000);
+  Track(trOffset, '時間補正', 0, -3600, 3600, 0.01);
+  Track(trInitialState, '開始状態', 100, 0, 100);
 
   AddGroup(Groups[0], '発生', 0);
-  Select(slEmission, '発生方式', ['スタイル既定', '連続', '発射', '爆発・放射', '噴出']);
-  AddCheck(Checks[ckAutoEmitter], '発生位置を自動', 1);
-  Track(trX, '発生位置X', 0, -8192, 8192, 0.1);
-  Track(trEmitterY, '発生位置Y', 0, -8192, 8192, 0.1);
-  Track(trRange, '発生範囲(%)', 120, 0, 400);
-  Track(trStart, '発生開始(秒)', 0, 0, 3600, 0.01);
-  Track(trDuration, '発生時間(0=無制限)', 0, 0, 3600, 0.01);
-  Track(trPeriod, '繰返し周期(0=既定)', 0, 0, 60, 0.1);
-  Track(trBurst, '瞬間発生量', 450, 0, 12000);
-  Track(trLife, '寿命(0=スタイル既定)', 0, 0, 30, 0.1);
-  Track(trPrewarm, '予備動作(-1=無/0=自動)', 0, -1, 30, 0.1);
+  Select(slEmission, '発生方式', ['自動', '連続', '発射', '爆発・放射', '噴出']);
+  AddCheck(Checks[ckAutoEmitter], '自動配置', 1);
+  Track(trX, '位置X', 0, -8192, 8192, 0.1);
+  Track(trEmitterY, '位置Y', 0, -8192, 8192, 0.1);
+  Track(trRange, '発生範囲', 120, 0, 400);
+  Track(trStart, '開始', 0, 0, 3600, 0.01);
+  Track(trDuration, '継続時間', 0, 0, 3600, 0.01);
+  Track(trPeriod, '反復周期', 0, 0, 60, 0.1);
+  Track(trBurst, '発射数', 450, 0, 12000);
+  Track(trLife, '寿命', 0, 0, 30, 0.1);
+  Track(trPrewarm, '予備動作', 0, -1, 30, 0.1);
   AddGroup(GroupEnds[0], '', 1);
 
-  AddGroup(Groups[1], '方向・風・運動', 0);
-  Track(trAngle, '発生角度(0=基準方向)', 0, -360, 360, 0.1);
-  Track(trSpread, '広がり角(-1=スタイル既定)', -1, -1, 360, 0.1);
-  Track(trGravity, '重力強度(-1=スタイル既定)', -1, -1, 3000);
-  Track(trGravityAngle, '重力方向(0=下)', 0, -360, 360, 0.1);
-  Track(trWindAngle, '風向(0=右)', 0, -360, 360, 0.1);
-  Track(trWind, '風力調整', 0, -2000, 2000);
-  Track(trGust, '突風強度調整', 0, -2000, 2000);
-  Track(trGustPeriod, '突風周期(秒)', 3, 0.1, 30, 0.1);
-  Track(trTurbulence, '乱流強度調整', 0, -1000, 1000);
-  Track(trTurbulencePeriod, '乱流周期(秒)', 1.4, 0.1, 20, 0.1);
-  Track(trVortex, '渦回転調整(度/秒)', 0, -720, 720);
+  AddGroup(Groups[1], '運動', 0);
+  Track(trAngle, '角度', 0, -360, 360, 0.1);
+  Track(trSpread, '広がり', -1, -1, 360, 0.1);
+  Track(trGravity, '重力', -1, -1, 3000);
+  Track(trGravityAngle, '重力角', 0, -360, 360, 0.1);
+  Track(trWindAngle, '風向', 0, -360, 360, 0.1);
+  Track(trWind, '風力', 0, -2000, 2000);
+  Track(trGust, '突風', 0, -2000, 2000);
+  Track(trGustPeriod, '突風周期', 3, 0.1, 30, 0.1);
+  Track(trTurbulence, '乱流', 0, -1000, 1000);
+  Track(trTurbulencePeriod, '乱流周期', 1.4, 0.1, 20, 0.1);
+  Track(trVortex, '渦回転', 0, -720, 720);
   Track(trDrag, '空気抵抗', 0, 0, 10, 0.01);
   Track(trMaxSpeed, '最大速度', 2400, 1, 10000);
-  Track(trSway, '揺れ幅(%)', 100, 0, 500);
+  Track(trSway, '揺れ幅', 100, 0, 500);
   Track(trSwaySpeed, '揺れ速度', 1, 0, 10, 0.1);
   AddGroup(GroupEnds[1], '', 1);
 
-  AddGroup(Groups[2], '粒子の外観', 0);
-  Track(trSizeVariation, 'サイズのばらつき(%)', 55, 0, 100);
-  Track(trSpeedVariation, '速度のばらつき(%)', 30, 0, 100);
+  AddGroup(Groups[2], '外観', 0);
+  Track(trSizeVariation, 'サイズ差', 55, 0, 100);
+  Track(trSpeedVariation, '速度差', 30, 0, 100);
   Track(trAspect, '縦横比', 1, 0.1, 10, 0.1);
-  Track(trRotation, '回転速度(度/秒)', 75, -720, 720);
-  AddCheck(Checks[ckColor], '粒子色を指定', 0);
+  Track(trRotation, '回転速度', 75, -720, 720);
+  AddCheck(Checks[ckColor], '色指定', 0);
   AddColor(ParticleColor, '粒子色', 255, 255, 255);
-  Track(trColorVariation, '色のばらつき(%)', 15, 0, 100);
-  Track(trOpacity, '粒子不透明度(%)', 85, 0, 100);
-  Track(trDepth, '遠近感(%)', 50, 0, 100);
+  Track(trColorVariation, '色差', 15, 0, 100);
+  Track(trOpacity, '不透明度', 85, 0, 100);
+  Track(trDepth, '遠近感', 50, 0, 100);
   AddGroup(GroupEnds[2], '', 1);
 
   AddGroup(Groups[3], '接触', 1);
-  AddCheck(Checks[ckCollision], '画像と接触する', 1);
-  Track(trThreshold, 'アルファ判定しきい値', 128, 1, 255);
-  Select(slResponse, '接触反応', ['素材に合わせる', '跳ね返る', '付着する', '消滅する']);
-  Track(trBounce, '反発力(%)', 50, 0, 100);
-  Track(trSplash, '飛散量(%)', 70, 0, 200);
+  AddCheck(Checks[ckCollision], '接触判定', 1);
+  Track(trThreshold, 'しきい値', 128, 1, 255);
+  Select(slResponse, '反応', ['自動', '反射', '付着', '消滅']);
+  Track(trBounce, '反発力', 50, 0, 100);
+  Track(trSplash, '飛散量', 70, 0, 200);
   Track(trSplashSpeed, '飛散速度', 100, 0, 1000);
-  Track(trContactLife, '接触効果時間(秒)', 0.65, 0.05, 5, 0.05);
-  Track(trSlide, '滑落しやすさ(%)', 30, 0, 100);
+  Track(trContactLife, '接触時間', 0.65, 0.05, 5, 0.05);
+  Track(trSlide, '滑落', 30, 0, 100);
+  Track(trViscosity, '粘度', 70, 0, 100);
+  Track(trCohesion, 'まとまり', 75, 0, 100);
+  Track(trAdhesion, '付着力', 80, 0, 100);
+  Track(trDripTime, '滴下時間', 1.2, 0.05, 30, 0.05);
   AddGroup(GroupEnds[3], '', 1);
 
   AddGroup(Groups[4], '蓄積', 1);
-  AddCheck(Checks[ckAccumulation], '蓄積を描画', 1);
+  AddCheck(Checks[ckAccumulation], '蓄積表示', 1);
   Track(trAccumAmount, '蓄積量', 25, 0, 100, 0.1);
-  Track(trThickness, '最大蓄積厚', 26, 0, 300, 0.1);
-  Select(slAccumShape, '蓄積形状', ['輪郭', '水平(床)', '部分蓄積', '薄く付着']);
-  Track(trRoughness, '蓄積のばらつき(%)', 55, 0, 100);
-  Track(trSlope, '蓄積可能な傾斜', 55, 0, 89);
-  AddCheck(Checks[ckAccumColor], '蓄積色を指定', 0);
+  Track(trThickness, '厚さ', 26, 0, 300, 0.1);
+  Select(slAccumShape, '形状', ['輪郭', '水平', '部分', '薄膜']);
+  Track(trRoughness, '厚さ差', 55, 0, 100);
+  Track(trSlope, '傾斜限界', 55, 0, 89);
+  AddCheck(Checks[ckAccumColor], '別色指定', 0);
   AddColor(AccumColor, '蓄積色', 255, 255, 255);
-  Track(trAccumOpacity, '蓄積不透明度(%)', 100, 0, 100);
-  Track(trMelt, '消失速度(%/秒)', 0, 0, 100, 0.1);
-  AddCheck(Checks[ckFloor], '床を有効にする', 0);
-  Track(trFloor, '床位置(上から%)', 95, 0, 100, 0.1);
+  Track(trAccumOpacity, '蓄積濃度', 100, 0, 100);
+  Track(trMelt, '消失速度', 0, 0, 100, 0.1);
+  AddCheck(Checks[ckFloor], '床判定', 0);
+  Track(trFloor, '床位置', 95, 0, 100, 0.1);
   AddGroup(GroupEnds[4], '', 1);
 
-  AddGroup(Groups[5], '描画品質', 0);
-  Track(trBlur, '輪郭の柔らかさ', 0.6, 0, 5, 0.1);
-  Track(trMotionBlur, 'モーションブラー(%)', 35, 0, 100);
-  Track(trGlow, '発光強度調整(%)', 0, -200, 200);
+  AddGroup(Groups[5], '描画', 0);
+  Track(trBlur, 'ぼかし', 0.6, 0, 5, 0.1);
+  Track(trMotionBlur, '残像', 35, 0, 100);
+  Track(trGlow, '発光', 0, -200, 200);
   AddGroup(GroupEnds[5], '', 1);
 
-  AddGroup(Groups[6], '適用方法・描画範囲', 0);
-  Select(slDrawMode, '描画モード', ['元画像に重ねる', 'パーティクルのみ', '接触・蓄積のみ']);
-  Track(trWidth, '単独の幅(0=シーン)', 0, 0, 8192);
-  Track(trHeight, '単独の高さ(0=シーン)', 0, 0, 8192);
+  AddGroup(Groups[6], '出力', 0);
+  Select(slDrawMode, '表示方式', ['合成', '粒子', '接触・蓄積']);
+  Track(trWidth, '幅', 0, 0, 8192);
+  Track(trHeight, '高さ', 0, 0, 8192);
+  Track(trMargin, '下余白', 0, 0, 4096);
   AddGroup(GroupEnds[6], '', 1);
 end;
 
@@ -293,6 +324,10 @@ begin
   Result.CanvasWidth := Round(Value(trWidth)); Result.CanvasHeight := Round(Value(trHeight));
   Result.DrawMode := EnsureRange(Selects[slDrawMode].Value, 0, 2);
   Result.Prewarm := Value(trPrewarm);
+  Result.InitialState := Value(trInitialState);
+  Result.Viscosity := Value(trViscosity) / 100; Result.Cohesion := Value(trCohesion) / 100;
+  Result.Adhesion := Value(trAdhesion) / 100; Result.DripTime := Value(trDripTime);
+  Result.BottomMargin := Round(Value(trMargin));
 end;
 
 end.
