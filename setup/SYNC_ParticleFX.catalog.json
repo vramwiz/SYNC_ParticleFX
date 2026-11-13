@@ -1,0 +1,90 @@
+[
+  {
+    "id": "VRAMWIZ.SYNC_ParticleFX",
+    "name": "パーティクル演出",
+    "type": "フィルタプラグイン",
+    "summary": "雨・雪・水しぶきと画像輪郭への衝突・付着・蓄積を描画",
+    "description": "https://raw.githubusercontent.com/vramwiz/SYNC_ParticleFX/refs/heads/main/README.md",
+    "author": "VRAMの魔術師",
+    "repoURL": "https://github.com/vramwiz/SYNC_ParticleFX/",
+    "licenses": [
+      {
+        "type": "GPL-3.0",
+        "isCustom": false,
+        "copyrights": [
+          {
+            "years": "2026",
+            "holder": "VRAMの魔術師"
+          }
+        ],
+        "licenseBody": null
+      }
+    ],
+    "tags": [
+      "パーティクル",
+      "雨",
+      "雪",
+      "水しぶき",
+      "アニメーション"
+    ],
+    "dependencies": [],
+    "images": [],
+    "installer": {
+      "source": {
+        "direct": null,
+        "github": {
+          "owner": "vramwiz",
+          "repo": "SYNC_ParticleFX",
+          "pattern": "^SYNC_ParticleFX\\.zip$"
+        }
+      },
+      "install": [
+        {
+          "action": "download"
+        },
+        {
+          "action": "extract"
+        },
+        {
+          "action": "copy",
+          "from": "{tmp}/SYNC_ParticleFX",
+          "to": "{pluginsDir}/SYNC_ParticleFX"
+        }
+      ],
+      "uninstall": [
+        {
+          "action": "delete",
+          "path": "{pluginsDir}/SYNC_ParticleFX/SYNC_ParticleFX.auf2"
+        },
+        {
+          "action": "delete",
+          "path": "{pluginsDir}/SYNC_ParticleFX/README.md"
+        },
+        {
+          "action": "delete",
+          "path": "{pluginsDir}/SYNC_ParticleFX/LICENSE"
+        },
+        {
+          "action": "delete",
+          "path": "{pluginsDir}/SYNC_ParticleFX/THIRD_PARTY_NOTICES.md"
+        },
+        {
+          "action": "delete",
+          "path": "{pluginsDir}/SYNC_ParticleFX/ThirdParty/LICENSE.AviUtl2-SDK.txt"
+        }
+      ]
+    },
+    "version": [
+      {
+        "version": "v1.0.0",
+        "release_date": "2026-11-13",
+        "file": [
+          {
+            "path": "{pluginsDir}/SYNC_ParticleFX/SYNC_ParticleFX.auf2",
+            "XXH3_128": ""
+          }
+        ]
+      }
+    ]
+  }
+]

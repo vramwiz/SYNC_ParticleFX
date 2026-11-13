@@ -1,0 +1,32 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{06C98639-A235-42C3-9F27-E09F5BE8D61D}</ProjectGuid>
+        <ProjectVersion>20.4</ProjectVersion>
+        <FrameworkType>VCL</FrameworkType>
+        <Config Condition="'$(Config)'==''">Debug</Config>
+        <Platform Condition="'$(Platform)'==''">Win64</Platform>
+        <ProjectName>ParticleFX_Experiment</ProjectName>
+        <MainSource>ParticleFX_Experiment.dpr</MainSource>
+        <AppType>Console</AppType>
+        <TargetedPlatforms>2</TargetedPlatforms>
+        <DCC_ConsoleTarget>true</DCC_ConsoleTarget>
+        <DCC_Namespace>System;Winapi;Vcl;$(DCC_Namespace)</DCC_Namespace>
+        <DCC_ExeOutput>..\Win64\Experiment</DCC_ExeOutput>
+        <DCC_DcuOutput>..\Win64\Experiment\DCU</DCC_DcuOutput>
+        <DCC_RangeChecking Condition="'$(Config)'=='Debug'">true</DCC_RangeChecking>
+        <DCC_IntegerOverflowCheck Condition="'$(Config)'=='Debug'">true</DCC_IntegerOverflowCheck>
+        <DCC_DebugInformation Condition="'$(Config)'=='Debug'">1</DCC_DebugInformation>
+        <DCC_RangeChecking Condition="'$(Config)'=='Release'">false</DCC_RangeChecking>
+        <DCC_IntegerOverflowCheck Condition="'$(Config)'=='Release'">false</DCC_IntegerOverflowCheck>
+        <DCC_DebugInformation Condition="'$(Config)'=='Release'">0</DCC_DebugInformation>
+        <DCC_Optimize Condition="'$(Config)'=='Release'">true</DCC_Optimize>
+    </PropertyGroup>
+    <ItemGroup>
+        <DelphiCompile Include="$(MainSource)"><MainSource>MainSource</MainSource></DelphiCompile>
+        <DCCReference Include="..\Source\Common\ParticleFX_Types.pas"/>
+        <DCCReference Include="..\Source\Common\ParticleFX_Collision.pas"/>
+        <DCCReference Include="..\Source\Common\ParticleFX_Simulation.pas"/>
+        <DCCReference Include="..\Source\Common\ParticleFX_Renderer.pas"/>
+    </ItemGroup>
+    <Import Project="$(BDS)\Bin\CodeGear.Delphi.Targets"/>
+</Project>
