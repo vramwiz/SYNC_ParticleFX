@@ -92,7 +92,7 @@ begin
   Tangent := FXVec(D.Y, -D.X);
   Result.Position := FXVec(Width * 0.5 + S.EmitterX, Height * 0.5 + S.EmitterY);
   if (S.Emission = feContinuous) or
-    (S.AutomaticEmitter and (S.Emission in [feShot, feJet])) then
+    (S.AutomaticEmitter and (S.Emission in [feShot, feJet, feSpray])) then
   begin
     // 進行方向と反対の画面外へ発生線を置く。斜め方向も同じ投影式で扱う。
     Extent := (Abs(D.X) * Width + Abs(D.Y) * Height) * 0.5 + Result.Size * 4 + 4;
@@ -182,7 +182,7 @@ procedure TFXSimulator.ContactVisuals(const P: TFXParticle; const State: TFXCach
   Age: Double; const S: TFXSettings; Environment: TFXEnvironment; Output: TFXVisualList);
 var
   I, Count, Response: Integer;
-  T, Life, Angle, Speed, Dot, Fade: Double;
+  T, Life, Angle, Speed, Dot, Fade, ImpactScale: Double;
   V: TFXVisual;
   N, Tangent, Direction, Gravity, Reflected: TFXVec;
   function Flight(const Origin, InitialVelocity: TFXVec; Radius: Double;
@@ -265,6 +265,10 @@ begin
   if (Response = 4) and (T <= Life) then
   begin
     Count := Min(12, Round(S.Splash * 7));
+    ImpactScale := 1;
+    // A direct jet impact throws droplets farther than a glancing hit.
+    if (S.Style = fsWater) and (S.Emission = feSpray) then
+      ImpactScale := EnsureRange(-FXDot(State.HitVelocity, N) / 700, 1.0, 2.0);
     for I := 0 to Count - 1 do
     begin
       // 飛散は接触面の外向き半球へ出す。側面・下面の接触も同じ式で扱う。
@@ -273,6 +277,11 @@ begin
         N.Y * Cos(Angle) + Tangent.Y * Sin(Angle));
       Speed := S.SplashSpeed * (0.5 + FXRandom(P.ID, S.Seed, 130 + Cardinal(I)));
       V.Size := Max(0.55, P.Size * 0.48);
+      if ImpactScale > 1 then
+      begin
+        Speed := Speed * ImpactScale;
+        V.Size := Max(0.55, P.Size * (0.32 + 0.28 * FXRandom(P.ID, S.Seed, 220 + Cardinal(I))));
+      end;
       V.Opacity := S.Opacity * Fade * 0.8;
       if S.Style = fsSpark then V.Shape := shLight else V.Shape := shDrop;
       if Flight(FXVec(State.HitPosition.X + N.X * 1.5, State.HitPosition.Y + N.Y * 1.5),

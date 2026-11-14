@@ -19,7 +19,8 @@ const
 type
   TFXStyle = (fsRain, fsSnow, fsWater, fsPetal, fsLeaf, fsConfetti,
     fsSand, fsHail, fsFountain, fsSpark, fsInk, fsSlime);
-  TFXEmission = (feContinuous, feShot, feExplosion, feJet);
+  // 保存済みの識別値を保ち、新しい発生方式は末尾へ追加する。
+  TFXEmission = (feContinuous, feShot, feExplosion, feJet, feSpray);
   TFXMaterial = (fmWater, fmSnow, fmSand, fmPetal, fmLeaf, fmConfetti,
     fmHail, fmLight, fmInk, fmSlime);
   TFXMotion = (fxmNormal, fxmWind, fxmStorm, fxmVortex, fxmWeightless);
@@ -27,8 +28,8 @@ type
 const
   FX_MATERIAL_NAMES: array[TFXMaterial] of PWideChar = ('水', '雪', '砂',
     '花びら', '落ち葉', '紙吹雪', 'ひょう', '光', 'インク', 'スライム');
-  FX_SOURCE_NAMES: array[0..3] of PWideChar = ('広範囲', '一斉発射', '連続噴出', '爆発');
-  FX_SOURCE_VALUES: array[0..3] of TFXEmission = (feContinuous, feShot, feJet, feExplosion);
+  FX_SOURCE_NAMES: array[0..4] of PWideChar = ('広範囲', '一斉発射', '連続噴出', '爆発', '連続噴射');
+  FX_SOURCE_VALUES: array[0..4] of TFXEmission = (feContinuous, feShot, feJet, feExplosion, feSpray);
   FX_MOTION_NAMES: array[TFXMotion] of PWideChar = ('通常', '横風', '強風', '渦', '無重力');
 
 type
@@ -300,10 +301,29 @@ begin
   Style := Styles[Material];
   if Material = fmWater then
     case Emission of
-      feShot, feExplosion: Style := fsWater;
+      feShot, feExplosion, feSpray: Style := fsWater;
       feJet: Style := fsFountain;
     end;
   Result := FXDefaultSettings(Style);
+  // 組み合わせの基準だけを拡大し、設定済みプロジェクトのサイズ倍率を維持する。
+  // 雨の細い線とスライムの密度場は従来の外観を使う。
+  if not (Style in [fsRain, fsSlime]) then
+  begin
+    case Material of
+      fmWater: Result.Size := 7.5;
+      fmSnow: Result.Size := 14;
+      fmSand: Result.Size := 3.2;
+      fmPetal: Result.Size := 14;
+      fmLeaf: Result.Size := 18;
+      fmConfetti: Result.Size := 11;
+      fmHail: Result.Size := 7;
+      fmLight: Result.Size := 6.5;
+      fmInk: Result.Size := 10;
+    end;
+    Result.SizeVariation := 0.4; Result.Depth := 0.2;
+    Result.Opacity := 0.95;
+    if Material = fmSnow then Result.Blur := 0.2;
+  end;
   Result.Emission := Emission;
   Result.Duration := 0; Result.Period := 0; Result.Prewarm := 0;
   case Emission of
@@ -325,6 +345,18 @@ begin
       Result.Angle := 0; Result.DirectionSpread := 360; Result.Burst := 750;
       Result.Speed := Max(180.0, Result.Speed * 1.5);
       Result.AutomaticEmitter := False; Result.EmitterRange := 0;
+    end;
+    feSpray: begin
+      Result.Angle := 90; Result.DirectionSpread := 12;
+      Result.Speed := Max(480.0, Result.Speed);
+      // 自動なら左端から対象へかける。無効なら位置X/Yをノズル位置にする。
+      Result.AutomaticEmitter := True; Result.EmitterRange := 0;
+      if Material = fmWater then
+      begin
+        Result.Rate := 1250; Result.Speed := 1350; Result.Gravity := 140;
+        Result.DirectionSpread := 6; Result.SpeedVariation := 0.13;
+        Result.MotionBlur := 0.55;
+      end;
     end;
   end;
   case Motion of

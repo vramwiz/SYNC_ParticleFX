@@ -541,10 +541,13 @@ var
 
   procedure Preview(const Name: string; M: TFXMaterial; E: TFXEmission;
     Movement: TFXMotion; T: Double);
+  var
+    PreviewBlank: TFXPixels;
   begin
     S := FXComposeSettings(M, E, Movement);
-    R.Render(Blank, W, H, T, S, Pixels);
-    SavePNG('compose_' + Name, Pixels, W, H);
+    SetLength(PreviewBlank, WIDTH * HEIGHT);
+    R.Render(PreviewBlank, WIDTH, HEIGHT, T, S, Pixels);
+    SavePNG('compose_' + Name, Pixels, WIDTH, HEIGHT);
   end;
 
 begin
@@ -556,7 +559,8 @@ begin
     for I := Low(FX_SOURCE_VALUES) to High(FX_SOURCE_VALUES) do
       for J := Low(FX_SOURCE_VALUES) to I - 1 do
         Valid := Valid and (FX_SOURCE_VALUES[I] <> FX_SOURCE_VALUES[J]);
-    Check(Valid and (FX_SOURCE_VALUES[2] = feJet) and (FX_SOURCE_VALUES[3] = feExplosion),
+    Check(Valid and (FX_SOURCE_VALUES[2] = feJet) and (FX_SOURCE_VALUES[3] = feExplosion) and
+      (FX_SOURCE_VALUES[4] = feSpray),
       'source list maps named choices to emission values without assuming array indices');
 
     for Material := Low(TFXMaterial) to High(TFXMaterial) do
@@ -639,9 +643,132 @@ begin
     Preview('water_rain', fmWater, feContinuous, fxmNormal, 0.5);
     Preview('water_shot', fmWater, feShot, fxmNormal, 0.2);
     Preview('water_fountain', fmWater, feJet, fxmNormal, 0.5);
+    Preview('water_spray', fmWater, feSpray, fxmNormal, 0.5);
     Preview('petal_vortex', fmPetal, feContinuous, fxmVortex, 0.5);
     Preview('light_explosion', fmLight, feExplosion, fxmNormal, 0.2);
     Preview('slime_weightless', fmSlime, feJet, fxmWeightless, 0.5);
+  finally
+    V.Free; Sim.Free; Env.Free; Cold.Free; R.Free;
+  end;
+end;
+
+procedure VisibilityAndSprayChecks;
+const
+  W = 1920; H = 1080;
+  Materials: array[0..7] of TFXMaterial = (fmSnow, fmSand, fmPetal, fmLeaf,
+    fmConfetti, fmHail, fmLight, fmInk);
+  Names: array[0..7] of string = ('snow', 'sand', 'petal', 'leaf',
+    'confetti', 'hail', 'light', 'ink');
+var
+  R, Cold: TFXRenderer;
+  Env: TFXEnvironment;
+  Sim: TFXSimulator;
+  V: TFXVisualList;
+  Blank, Pixels, Saved, Other, Target: TFXPixels;
+  S, Base: TFXSettings;
+  I, J, X, Y, OldArea, NewArea, Airborne, Splashes: Integer;
+  Valid: Boolean;
+
+  function VisibleArea(const Image: TFXPixels): Integer;
+  var
+    Pixel: TFXPixelRGBA;
+  begin
+    Result := 0;
+    for Pixel in Image do if Pixel.A >= 96 then Inc(Result);
+  end;
+
+begin
+  R := TFXRenderer.Create; Cold := TFXRenderer.Create;
+  Env := TFXEnvironment.Create; Sim := TFXSimulator.Create; V := TFXVisualList.Create;
+  try
+    SetLength(Blank, W * H);
+    for I := Low(Materials) to High(Materials) do
+    begin
+      S := FXComposeSettings(Materials[I], feContinuous, fxmNormal);
+      Base := FXDefaultSettings(S.Style);
+      Base.Emission := feContinuous; Base.Angle := 0; Base.DirectionSpread := 10;
+      R.Render(Blank, W, H, 0.5, Base, Pixels);
+      OldArea := VisibleArea(Pixels);
+      SavePNG('visibility_' + Names[I] + '_before', Pixels, W, H);
+      R.Render(Blank, W, H, 0.5, S, Pixels);
+      NewArea := VisibleArea(Pixels);
+      SavePNG('visibility_' + Names[I] + '_after', Pixels, W, H);
+      Check((OldArea > 0) and (NewArea > OldArea * 2),
+        Format('Full HD %s has more than twice the visible particle area: %d -> %d',
+          [Names[I], OldArea, NewArea]));
+    end;
+    for I := 0 to 1 do
+    begin
+      if I = 0 then S := FXComposeSettings(fmWater, feContinuous, fxmNormal)
+      else S := FXComposeSettings(fmSlime, feContinuous, fxmNormal);
+      Base := FXDefaultSettings(S.Style);
+      Check(CompareMem(@S, @Base, SizeOf(S)),
+        FXStyleName(S.Style) + ': existing rain and slime composition defaults are unchanged');
+    end;
+
+    S := FXComposeSettings(fmWater, feSpray, fxmNormal);
+    Check((S.Style = fsWater) and (S.Angle = 90) and S.AutomaticEmitter and
+      (S.EmitterRange = 0) and (S.Speed > S.Gravity),
+      'water spray uses a narrow continuous rightward stream from the upstream edge');
+    R.Render(Blank, W, H, 0, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'continuous spray starts empty instead of firing a prewarmed burst');
+    R.Render(Blank, W, H, 2, S, Saved);
+    Check(VisibleArea(Saved) > 3000, 'Full HD water spray has a visible stream at its default size and rate');
+    SavePNG('water_spray_fullhd', Saved, W, H);
+
+    // 人物に横から届き、飛散と水流が同時に残ることを通常の描画器で検証する。
+    R.Render(Source, WIDTH, HEIGHT, 1.2, S, Pixels);
+    SavePNG('water_spray_contact', Pixels, WIDTH, HEIGHT);
+    Env.Prepare(Source, WIDTH, HEIGHT, S, 1.2);
+    Sim.Generate(1.2, S, Env, V);
+    Airborne := 0; Splashes := 0;
+    for J := 0 to V.Count - 1 do
+      if V[J].IsSplash then Inc(Splashes) else Inc(Airborne);
+    Check((Airborne > 50) and (Splashes > 10) and (Sim.CollisionCount > 0),
+      'water spray reaches the target alpha and keeps emitting while contact droplets splash');
+    R.Render(Blank, W, H, 4, S, Pixels);
+    Check(VisibleArea(Pixels) > 3000, 'continuous spray remains active after a single shot would have passed');
+    R.Render(Blank, W, H, 0.7345, S, Saved);
+    R.Render(Blank, W, H, 1.5, S, Pixels);
+    R.Render(Blank, W, H, 0.7345, S, Other);
+    Valid := EqualPixels(Saved, Other);
+    Cold.Render(Blank, W, H, 0.7345, S, Other);
+    Check(Valid and EqualPixels(Saved, Other), 'water spray reproduces fractional reverse seek and a cold cache');
+
+    S.StartTime := 2;
+    R.Render(Blank, W, H, 1.9, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'scheduled spray is absent before its start');
+    S.Duration := 0.3; S.Period := 1.5; S.Lifetime := 0.4;
+    S.AutomaticLifetime := False; S.AutomaticEmitter := False;
+    R.Render(Blank, W, H, 2.2, S, Pixels);
+    Check(CountAlpha(Pixels) > 0, 'spray emits during the requested duration');
+    R.Render(Blank, W, H, 3.2, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'spray stops and expires between repeated emissions');
+    R.Render(Blank, W, H, 3.7, S, Pixels);
+    Check(CountAlpha(Pixels) > 0, 'spray restarts at the requested period');
+
+    // 自動配置を切れば、同じ方式でノズルを移動・反転できる。
+    S := FXComposeSettings(fmWater, feSpray, fxmNormal);
+    S.AutomaticEmitter := False; S.EmitterX := -300; S.EmitterY := -100;
+    S.Angle := 270;
+    SetLength(Target, WIDTH * HEIGHT);
+    Env.Prepare(Target, WIDTH, HEIGHT, S, 0.1);
+    Sim.Generate(0.1, S, Env, V);
+    Valid := V.Count > 0;
+    for J := 0 to V.Count - 1 do
+      Valid := Valid and (V[J].Position.X < WIDTH * 0.5 + S.EmitterX) and
+        (V[J].Velocity.X < 0);
+    Check(Valid, 'manual nozzle position and angle produce a leftward continuous spray');
+    S := FXComposeSettings(fmWater, feSpray, fxmNormal);
+    S.DrawMode := 2;
+    R.Render(Target, WIDTH, HEIGHT, 1.2, S, Pixels);
+    Check(CountAlpha(Pixels) = 0, 'spray contact-only mode hides the airborne stream on a transparent image');
+    R.Render(Source, WIDTH, HEIGHT, 1.2, S, Pixels);
+    NewArea := 0;
+    for Y := 0 to HEIGHT - 1 do
+      for X := 0 to WIDTH - 1 do
+        if (Source[Y * WIDTH + X].A = 0) and (Pixels[Y * WIDTH + X].A > 16) then Inc(NewArea);
+    Check(NewArea > 100, 'spray contact-only mode retains visible splashes around the target');
   finally
     V.Free; Sim.Free; Env.Free; Cold.Free; R.Free;
   end;
@@ -998,7 +1125,7 @@ const
   TileHeight = HEIGHT div 2;
   Header = 28;
   Names: array[0..3] of string = ('RAIN / alpha collisions', 'SNOW / accumulation 0-100',
-    'WATER / shot + splash', 'FOUNTAIN / continuous jet');
+    'WATER / continuous spray + splash', 'FOUNTAIN / continuous jet');
 var
   Renderers: array[0..3] of TFXRenderer;
   S: TFXSettings;
@@ -1036,8 +1163,7 @@ begin
         case Tile of
           0: S := FXDefaultSettings(fsRain);
           1: begin S := FXDefaultSettings(fsSnow); S.AccumAmount := F / (Frames - 1) * 100; end;
-          2: begin S := FXDefaultSettings(fsWater); S.AutomaticEmitter := False;
-            S.EmitterX := -420; S.EmitterY := -120; end;
+          2: S := FXComposeSettings(fmWater, feSpray, fxmNormal);
           3: begin S := FXDefaultSettings(fsFountain); S.AutomaticEmitter := False;
             S.EmitterY := 200; S.FloorEnabled := True; end;
         end;
@@ -1191,6 +1317,152 @@ begin
   end;
 end;
 
+procedure ProductionPreviewChecks;
+const
+  W = 1920; H = 1080; SW = 360; SH = 240; Frames = 32;
+var
+  R: TFXRenderer;
+  Env: TFXEnvironment;
+  Sim: TFXSimulator;
+  V: TFXVisualList;
+  Person, Blank, Pixels, Other: TFXPixels;
+  S: TFXSettings;
+  X, Y, I, F, A, Incoming, Outgoing, OnPerson, Lit, Shadow, Count: Integer;
+  GIF, Decoded: TGIFImage;
+  Frame: TGIFFrame;
+  Control: TGIFGraphicControlExtension;
+  Loop: TGIFAppExtNSLoop;
+  Bitmap: TBitmap;
+  Row: PBytesRow;
+  Valid: Boolean;
+  Color: TColor;
+begin
+  R := TFXRenderer.Create; Env := TFXEnvironment.Create;
+  Sim := TFXSimulator.Create; V := TFXVisualList.Create;
+  try
+    SetLength(Blank, W * H);
+    S := FXComposeSettings(fmSnow, feContinuous, fxmNormal);
+    R.Render(Blank, W, H, 0.5, S, Pixels);
+    SavePNG('snow_fullhd', Pixels, W, H);
+    S.Size := 8; S.Blur := 0.3;
+    R.Render(Blank, W, H, 0.5, S, Other);
+    Incoming := 0; Outgoing := 0;
+    for I := 0 to High(Pixels) do
+    begin
+      if Pixels[I].A >= 160 then Inc(Incoming);
+      if Other[I].A >= 160 then Inc(Outgoing);
+    end;
+    Check((Outgoing > 0) and (Incoming >= 2 * Outgoing),
+      Format('production snow has at least twice the high-opacity Full HD coverage: %d -> %d',
+        [Outgoing, Incoming]));
+
+    // A stationary single blob isolates the lighting from the solver and particle color noise.
+    SetLength(Blank, SW * SH);
+    S := FXDefaultSettings(fsSlime);
+    S.Emission := feShot; S.Burst := 1; S.EmitterRange := 0; S.Speed := 0;
+    S.Gravity := 0; S.Collision := False; S.AutomaticEmitter := False;
+    S.Size := 35; S.Depth := 0; S.SizeVariation := 0; S.ColorVariation := 0; S.Opacity := 1;
+    R.Render(Blank, SW, SH, 0.5, S, Pixels);
+    R.Render(Blank, SW, SH, 0.7, S, Other);
+    R.Render(Blank, SW, SH, 0.5, S, Other);
+    Check(EqualPixels(Pixels, Other), 'directional slime lighting is deterministic after a reverse seek');
+    Lit := 0; Shadow := 0; Count := 0;
+    for Y := SH div 2 - 25 to SH div 2 - 17 do
+      for X := SW div 2 - 25 to SW div 2 - 17 do
+      begin
+        I := Y * SW + X;
+        F := (SH - 1 - Y) * SW + (SW - 1 - X);
+        if (Pixels[I].A >= 250) and (Pixels[F].A >= 250) then
+        begin
+          Inc(Lit, Pixels[I].G); Inc(Shadow, Pixels[F].G); Inc(Count);
+        end;
+      end;
+    Check((Count >= 25) and (Lit - Shadow >= 6 * Count),
+      'slime has a brighter upper-left face and a darker lower-right face at matching opacity');
+    SavePNG('slime_shading', Pixels, SW, SH);
+
+    // Keep only the person; other fixture objects should not intercept the jet.
+    SetLength(Person, W * H);
+    for Y := 160 to 979 do
+      for X := 660 to 1259 do
+        Person[Y * W + X] := Source[(Y div 2) * WIDTH + X div 2];
+    S := FXComposeSettings(fmWater, feSpray, fxmNormal);
+    S.AutomaticEmitter := False; S.EmitterX := -700;
+    S.StartTime := 0.2; S.Duration := 1.0;
+    Env.Prepare(Person, W, H, S, 0.4);
+    Sim.Generate(0.4, S, Env, V);
+    Incoming := 0; Outgoing := 0;
+    for I := 0 to V.Count - 1 do
+      if V[I].IsSplash then Inc(Outgoing) else Inc(Incoming);
+    Check((Incoming > 25) and (Outgoing = 0),
+      'Full HD person demo shows an approaching stream before the first impact');
+
+    Env.Prepare(Person, W, H, S, 0.95);
+    Sim.Generate(0.95, S, Env, V);
+    Incoming := 0; Outgoing := 0;
+    for I := 0 to V.Count - 1 do
+      if V[I].IsSplash then
+      begin
+        if V[I].Velocity.X < -80 then Inc(Outgoing);
+      end
+      else if V[I].Velocity.X > 0 then Inc(Incoming);
+    Check((Incoming > 50) and (Outgoing > 20) and (Sim.CollisionCount > 0),
+      'Full HD impact visibly throws water back from the person while the stream keeps arriving');
+    R.Render(Person, W, H, 0.95, S, Pixels);
+    SavePNG('water_impact_fullhd', Pixels, W, H);
+    OnPerson := 0;
+    for I := 0 to High(Person) do
+      if (Person[I].A = 255) and
+        (PCardinal(@Person[I])^ = PCardinal(@Pixels[I])^) then Inc(OnPerson);
+    Check(OnPerson > 100000, 'water impact compositing preserves the opaque person away from the hit');
+
+    if (ParamCount >= 2) and SameText(ParamStr(2), 'animation') then
+    begin
+      GIF := TGIFImage.Create; Bitmap := TBitmap.Create;
+      try
+        GIF.ColorReduction := rmQuantize; GIF.DitherMode := dmNearest;
+        Bitmap.SetSize(W div 3, H div 3);
+        for F := 0 to Frames - 1 do
+        begin
+          R.Render(Person, W, H, F * 0.08, S, Pixels);
+          Bitmap.PixelFormat := pf32bit;
+          for Y := 0 to Bitmap.Height - 1 do
+          begin
+            Row := Bitmap.ScanLine[Y];
+            for X := 0 to Bitmap.Width - 1 do
+            begin
+              I := (Y * W + X) * 3; A := Pixels[I].A;
+              Row[X * 4] := (Pixels[I].B * A + 57 * (255 - A)) div 255;
+              Row[X * 4 + 1] := (Pixels[I].G * A + 39 * (255 - A)) div 255;
+              Row[X * 4 + 2] := (Pixels[I].R * A + 25 * (255 - A)) div 255;
+              Row[X * 4 + 3] := 255;
+            end;
+          end;
+          Frame := GIF.Add(Bitmap);
+          Control := TGIFGraphicControlExtension.Create(Frame); Control.Delay := 8;
+        end;
+        Loop := TGIFAppExtNSLoop.Create(GIF.Images[0]); Loop.Loops := 0;
+        GIF.SaveToFile(TPath.Combine(OutputDir, 'water_impact_demo.gif'));
+        Decoded := TGIFImage.Create;
+        try
+          Decoded.LoadFromFile(TPath.Combine(OutputDir, 'water_impact_demo.gif'));
+          Valid := Decoded.Images.Count = Frames;
+          for F := 0 to Decoded.Images.Count - 1 do
+          begin
+            Color := Decoded.Images[F].Bitmap.Canvas.Pixels[320, 250];
+            Valid := Valid and (Abs(Integer(GetRValue(Color)) - $43) < 16) and
+              (Abs(Integer(GetGValue(Color)) - $89) < 16) and
+              (Abs(Integer(GetBValue(Color)) - $91) < 16);
+          end;
+          Check(Valid, 'water impact GIF decodes all 32 frames with the original person colors');
+        finally Decoded.Free; end;
+      finally Bitmap.Free; GIF.Free; end;
+    end;
+  finally
+    V.Free; Sim.Free; Env.Free; R.Free;
+  end;
+end;
+
 procedure Run;
 var
   Area0, Area50, Area100: Integer;
@@ -1303,6 +1575,8 @@ begin
   AlphaAndCacheChecks;
   FullHDChecks;
   CompositionChecks;
+  VisibilityAndSprayChecks;
+  ProductionPreviewChecks;
   SlimeChecks;
   SlimeMotionChecks;
   StartupStateChecks;

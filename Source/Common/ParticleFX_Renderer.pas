@@ -447,10 +447,16 @@ begin
       if Density <= 0.25 then Continue;
       Cover := EnsureRange((Density - 0.25) / 0.35, 0.0, 1.0);
       Cover := Cover * Cover * (3 - 2 * Cover);
-      NX := C10.Density - C00.Density; NY := C01.Density - C00.Density;
-      W := 1 / (1 + Sqr(Density));
-      Light := EnsureRange(0.9 - (NX + NY) * W * 0.2, 0.75, 1.12);
-      Shine := Sqr(Max(0.0, Min(1.0, (NX + NY) * 0.7))) * 80 * W;
+      // Interpolate the density gradient; light the surface from the upper left.
+      // Keep the silhouette and opacity independent of the lighting.
+      NX := ((C10.Density - C00.Density) * (1 - TY) +
+        (C11.Density - C01.Density) * TY) * 0.55;
+      NY := ((C01.Density - C00.Density) * (1 - TX) +
+        (C11.Density - C10.Density) * TX) * 0.55;
+      W := 1 / Sqrt(1 + Sqr(NX) + Sqr(NY));
+      Light := EnsureRange(0.92 + (W * (0.8 + 0.36 * NX + 0.48 * NY) - 0.8) * 0.65,
+        0.64, 1.12);
+      Shine := 28 * Sqr(EnsureRange((Light - 0.94) / 0.11, 0.0, 1.0));
       Red := Min(255.0, Mix(C00.R, C10.R, C01.R, C11.R) / Density * Light + Shine);
       Green := Min(255.0, Mix(C00.G, C10.G, C01.G, C11.G) / Density * Light + Shine);
       Blue := Min(255.0, Mix(C00.B, C10.B, C01.B, C11.B) / Density * Light + Shine);

@@ -106,6 +106,15 @@ begin
     SetTrack(trAmount, Amount);
     SetTrack(trSize, Preset.Size / Base.Size * 100);
     SetTrack(trSpeed, Preset.Speed / Base.Speed * 100);
+    SetTrack(trSizeVariation, Preset.SizeVariation * 100);
+    SetTrack(trSpeedVariation, Preset.SpeedVariation * 100);
+    SetTrack(trAspect, Preset.Aspect);
+    SetTrack(trRotation, Preset.Rotation);
+    SetTrack(trColorVariation, Preset.ColorVariation * 100);
+    SetTrack(trOpacity, Preset.Opacity * 100);
+    SetTrack(trDepth, Preset.Depth * 100);
+    SetTrack(trBlur, Preset.Blur);
+    SetTrack(trMotionBlur, Preset.MotionBlur * 100);
     SetSelect(slEmission, Ord(Preset.Emission) + 1);
     SetTrack(trDuration, Preset.Duration);
     SetTrack(trPeriod, Preset.Period);
@@ -184,7 +193,7 @@ begin
   Track(trInitialState, '開始状態', 100, 0, 100);
 
   AddGroup(Groups[0], '発生条件', 0);
-  Select(slEmission, '発生方式', ['自動', '連続', '発射', '爆発・放射', '噴出']);
+  Select(slEmission, '発生方式', ['自動', '連続', '発射', '爆発・放射', '噴出', '噴射']);
   AddCheck(Checks[ckAutoEmitter], '自動配置', 1);
   Track(trX, '位置X', 0, -8192, 8192, 0.1);
   Track(trEmitterY, '位置Y', 0, -8192, 8192, 0.1);
@@ -286,7 +295,8 @@ end;
 function ReadParticleFXSettings: TFXSettings;
 begin
   Result := FXDefaultSettings(TFXStyle(EnsureRange(Selects[slStyle].Value, 0, FX_STYLE_COUNT - 1)));
-  if Selects[slEmission].Value in [1..4] then
+  if (Selects[slEmission].Value >= 1) and
+    (Selects[slEmission].Value <= Ord(High(TFXEmission)) + 1) then
     Result.Emission := TFXEmission(Selects[slEmission].Value - 1);
   Result.Rate := Min(3000.0, Result.Rate * Value(trAmount) / 100);
   Result.Speed := Result.Speed * Value(trSpeed) / 100;

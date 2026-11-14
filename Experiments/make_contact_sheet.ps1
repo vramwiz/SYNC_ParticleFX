@@ -1,12 +1,13 @@
-﻿param([string]$PreviewDirectory, [switch]$StartupOnly, [switch]$CompositionOnly)
+﻿param([string]$PreviewDirectory, [switch]$StartupOnly, [switch]$CompositionOnly, [switch]$VisibilityOnly)
 
 # 実験出力の透過PNGを市松模様へ重ね、目視確認用の一覧を作る。
 $ErrorActionPreference = 'Stop'
-if ($StartupOnly -and $CompositionOnly) { throw 'Choose one sheet type at a time.' }
+if (($StartupOnly -and $CompositionOnly) -or ($StartupOnly -and $VisibilityOnly) -or
+    ($CompositionOnly -and $VisibilityOnly)) { throw 'Choose one sheet type at a time.' }
 if (-not $PreviewDirectory) { $PreviewDirectory = Join-Path $PSScriptRoot '..\Win64\Experiment\Preview' }
 Add-Type -AssemblyName System.Drawing
 $files = @(Get-ChildItem -LiteralPath $PreviewDirectory -Filter '*.png' -File |
-    Where-Object Name -notin @('contact_sheet.png', 'startup_state.png', 'combinations.png') | Sort-Object Name)
+    Where-Object Name -notin @('contact_sheet.png', 'startup_state.png', 'combinations.png', 'visibility.png') | Sort-Object Name)
 if ($StartupOnly) {
     $files = @(foreach ($kind in @('rain', 'snow', 'slime')) {
         foreach ($state in @(0, 50, 100)) {
@@ -15,10 +16,17 @@ if ($StartupOnly) {
     })
 }
 if ($CompositionOnly) {
-    $files = @(foreach ($name in @('snow_normal', 'snow_wind', 'snow_storm',
-        'water_rain', 'water_shot', 'water_fountain', 'petal_vortex',
+    $files = @(foreach ($name in @('snow_normal', 'snow_storm', 'petal_vortex',
+        'water_rain', 'water_shot', 'water_fountain', 'water_spray',
         'light_explosion', 'slime_weightless')) {
         Get-Item -LiteralPath (Join-Path $PreviewDirectory ('compose_{0}.png' -f $name))
+    })
+}
+if ($VisibilityOnly) {
+    $files = @(foreach ($name in @('snow', 'sand', 'petal', 'leaf', 'confetti', 'hail', 'light', 'ink')) {
+        foreach ($version in @('before', 'after')) {
+            Get-Item -LiteralPath (Join-Path $PreviewDirectory ('visibility_{0}_{1}.png' -f $name, $version))
+        }
     })
 }
 $tileWidth = 400
@@ -27,6 +35,7 @@ if ($StartupOnly -or $CompositionOnly) { $tileWidth = 320; $tileHeight = 180 }
 $headerHeight = 28
 $gap = 12
 $columns = 3
+if ($VisibilityOnly) { $columns = 4; $tileWidth = 384; $tileHeight = 216 }
 $rows = [int][Math]::Ceiling($files.Count / $columns)
 $sheet = [Drawing.Bitmap]::new($gap + $columns * ($tileWidth + $gap), $gap + $rows * ($tileHeight + $headerHeight + $gap))
 $graphics = [Drawing.Graphics]::FromImage($sheet)
@@ -53,6 +62,7 @@ try {
     $outputName = 'contact_sheet.png'
     if ($StartupOnly) { $outputName = 'startup_state.png' }
     if ($CompositionOnly) { $outputName = 'combinations.png' }
+    if ($VisibilityOnly) { $outputName = 'visibility.png' }
     $outputPath = Join-Path $PreviewDirectory $outputName
     $sheet.Save($outputPath, [Drawing.Imaging.ImageFormat]::Png)
     Write-Output ([IO.Path]::GetFullPath($outputPath))
