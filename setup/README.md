@@ -1,4 +1,4 @@
-# パーティクル演出（SYNC_ParticleFX）
+# パーティクル演出
 
 雨・雪・水しぶきなどを描き、画像のアルファ輪郭へ衝突・付着・蓄積させるAviUtl2用フィルタープラグインです。Windows 64bit / AviUtl2 2.1.16以降を対象とします。
 
@@ -65,35 +65,3 @@ Copyright (c) 2026 VRAMの魔術師
 AviUtl ExEdit2 Plugin SDK由来の定義はMITライセンスです。Copyright (c) 2025 Kenkun。全文を `ThirdParty/LICENSE.AviUtl2-SDK.txt` に同梱しています。
 
 ソース公開先: [vramwiz/SYNC_ParticleFX](https://github.com/vramwiz/SYNC_ParticleFX)
-
-## 配布ZIPの作成・カタログ登録（開発用）
-
-1. Delphi / Win64のReleaseをビルドします。既定の入力は `C:\ProgramData\aviutl2\Plugin\SYNC_ParticleFX\SYNC_ParticleFX.auf2` です。
-2. [xxHash公式配布](https://github.com/Cyan4973/xxHash/releases/tag/v0.8.4)の `xxhsum.exe` を `Win64\Dependencies\xxHash-0.8.4` またはPATHが通った場所に置きます。
-3. `setup\SYNC_ParticleFX.catalog.json` の `version` 末尾に公開タグと日付を設定します。初期値は `v1.0.0` です。次の版は末尾に追加します。
-4. `setup\make_release_zip.bat` を実行します。`setup\SYNC_ParticleFX.zip` を作成し、ZIPに収録したAUF2と同じバイト列のXXH3-128を末尾バージョンへ記録します。
-5. 同じソースをGitHubのタグへ保存し、ReleaseにZIPを添付します。カタログ登録には `SYNC_ParticleFX.catalog.json` を使用します。ハッシュはZIP作成時に、実際に同梱するAUF2の値へ更新されます。
-
-別の出力フォルダーやxxhsumを使用する場合:
-
-```powershell
-.\setup\make_release_zip.bat -ReleaseDirectory "D:\Release" -XxhsumPath "D:\Tools\xxhsum.exe"
-```
-
-バッチは既存AUF2の梱包とローカルJSONのハッシュ更新を行います。プラグインのビルドとGitHubへの公開は別途行ってください。公開先の初期設定は `vramwiz/SYNC_ParticleFX` です。
-
-JSONのパッケージID・GitHub取得先・ZIP名・インストール先・末尾バージョンの日付とハッシュ形式・削除先を確認してからZIPを更新します。対象は `VRAMWIZ.SYNC_ParticleFX`、ZIP名は `SYNC_ParticleFX.zip` です。削除先は下記5ファイルと一致させます。過去のバージョンのハッシュは維持し、末尾のバージョンだけを更新します。
-
-ZIPとJSONは `setup` 内へ作成・更新します。バッチは別の作業フォルダーからも実行できます。必要ファイルの不足やJSONの不整合がある場合はエラー終了し、既存の配布ZIPを保持します。`xxhsum.exe` は開発用で、配布ZIPには含めません。
-
-ZIP内の構成:
-
-```text
-SYNC_ParticleFX/
-  SYNC_ParticleFX.auf2
-  README.md
-  LICENSE
-  THIRD_PARTY_NOTICES.md
-  ThirdParty/
-    LICENSE.AviUtl2-SDK.txt
-```

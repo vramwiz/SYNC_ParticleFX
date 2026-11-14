@@ -1,4 +1,4 @@
-# パーティクル演出（SYNC_ParticleFX）
+# パーティクル演出
 
 雨・雪・水しぶきなどを描き、画像のアルファ輪郭への衝突・付着・蓄積を表現するAviUtl2用フィルタープラグインです。Delphi / Direct2Dで実装し、共通の粒子計算と描画を通常のEXEからも利用できます。
 
@@ -116,12 +116,6 @@
 ![くぼみから前面へ流れ落ちるスライム](Sample/slime_demo.gif)
 
 [人物・輪・段差・斜面での動画見本](Sample/slime_person_demo.gif)も用意しています。新しい描画では左上から光を当てたような明暗が付き、[スライムの凹凸](Sample/slime_shaded.png)が分かりやすくなります。透明度や流れ方の設定は変わりません。
-
-## 配布ZIPとGitHub
-
-Releaseをビルドした後に `setup\make_release_zip.bat` を実行すると、`setup\SYNC_ParticleFX.zip` を作成し、`setup\SYNC_ParticleFX.catalog.json` の末尾バージョンへAUF2のXXH3-128を記録します。JSONの取得先・インストール先・削除先とZIPの内容も照合し、不整合があれば既存ZIPを保持して終了します。必要なツールと手順は [setup/README.md](setup/README.md) を参照してください。
-
-バッチは既存のAUF2を梱包します。GitHub公開時は同じ版のソースをタグへ保存し、ZIPをReleaseへ添付します。Win64、中間バイナリ、生成ZIPはGitの追跡対象から除外しています。
 
 ## ライセンス
 
