@@ -87,7 +87,7 @@ if exist "$(OUTPUTDIR)$(PROJECTNAME).rsm" del /Q "$(OUTPUTDIR)$(PROJECTNAME).rsm
         <Manifest_File>(なし)</Manifest_File>
         <AppDPIAwarenessMode>none</AppDPIAwarenessMode>
         <DCC_ExeOutput>C:\ProgramData\aviutl2\Plugin\SYNC_ParticleFX\</DCC_ExeOutput>
-        <Debugger_HostApplication>D:\aviutl2_v2.1.17\aviutl2.exe</Debugger_HostApplication>
+        <Debugger_HostApplication>D:\aviutl2_v2.1.16\aviutl2.exe</Debugger_HostApplication>
     </PropertyGroup>
     <ItemGroup>
         <DelphiCompile Include="$(MainSource)">
@@ -96,9 +96,11 @@ if exist "$(OUTPUTDIR)$(PROJECTNAME).rsm" del /Q "$(OUTPUTDIR)$(PROJECTNAME).rsm
         <DCCReference Include="Source\Lib\AviUtl2FilterTypes.pas"/>
         <DCCReference Include="Source\Lib\FilterTable\PluginFilterTable.pas"/>
         <DCCReference Include="Source\Common\ParticleFX_Types.pas"/>
+        <DCCReference Include="Source\Common\ParticleFX_Motion.pas"/>
         <DCCReference Include="Source\Common\ParticleFX_Collision.pas"/>
         <DCCReference Include="Source\Common\ParticleFX_Simulation.pas"/>
         <DCCReference Include="Source\Common\ParticleFX_Viscous.pas"/>
+        <DCCReference Include="Source\Common\ParticleFX_Sprites.pas"/>
         <DCCReference Include="Source\Common\ParticleFX_Renderer.pas"/>
         <DCCReference Include="Source\Plugin\Filter\ParticleFX_Parameters.pas"/>
         <DCCReference Include="Source\Plugin\Filter\SYNC_ParticleFX_FilterPlugin.pas"/>

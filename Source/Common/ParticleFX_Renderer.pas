@@ -11,7 +11,7 @@ interface
 
 uses
   Winapi.D2D1, Winapi.Wincodec, ParticleFX_Types, ParticleFX_Collision,
-  ParticleFX_Simulation, ParticleFX_Viscous;
+  ParticleFX_Simulation, ParticleFX_Viscous, ParticleFX_Sprites;
 
 type
   TFXFluidCell = record
@@ -32,7 +32,8 @@ type
     FBrush: ID2D1SolidColorBrush;
     FSoftBrush: ID2D1RadialGradientBrush;
     FRoundStroke: ID2D1StrokeStyle;
-    FPetal, FLeaf, FAccumulation, FAccumEdge: ID2D1PathGeometry;
+    FAccumulation, FAccumEdge: ID2D1PathGeometry;
+    FSprites: TFXSpriteLibrary;
     FEnvironment: TFXEnvironment;
     FSimulator: TFXSimulator;
     FViscous: TFXViscousFlow;
@@ -50,7 +51,7 @@ type
     procedure ResetGraphics;
     procedure SetColor(Color: Cardinal; Opacity: Double);
     procedure UpdateSoftColor(Color: Cardinal);
-    procedure DrawVisual(const V: TFXVisual; const S: TFXSettings);
+    procedure DrawVisual(const V: TFXVisual; const S: TFXSettings; Accumulated: Boolean = False);
     procedure BuildAccumulation;
     procedure DrawAccumulation(const S: TFXSettings);
     procedure DrawViscousField(const S: TFXSettings);
@@ -85,6 +86,7 @@ begin
   OleCheck(FXCoIncrementMTAUsage(FMTACookie));
   FEnvironment := TFXEnvironment.Create;
   FSimulator := TFXSimulator.Create;
+  FSprites := TFXSpriteLibrary.Create;
   FVisuals := TFXVisualList.Create;
   FAccumRevision := -1;
 end;
@@ -92,6 +94,7 @@ end;
 destructor TFXRenderer.Destroy;
 begin
   ResetGraphics;
+  FSprites.Free;
   FViscous.Free; FVisuals.Free; FSimulator.Free; FEnvironment.Free;
   if FMTACookie <> nil then FXCoDecrementMTAUsage(FMTACookie);
   inherited;
@@ -100,13 +103,14 @@ end;
 procedure TFXRenderer.ResetGraphics;
 begin
   ResetTarget;
-  FPetal := nil; FLeaf := nil; FRoundStroke := nil;
+  FRoundStroke := nil;
   FAccumulation := nil; FAccumEdge := nil; FAccumRevision := -1;
   FFactory := nil; FWicFactory := nil;
 end;
 
 procedure TFXRenderer.ResetTarget;
 begin
+  if FSprites <> nil then FSprites.ResetTarget;
   FSoftBrush := nil; FBrush := nil; FTarget := nil; FBitmap := nil;
   FWidth := 0; FHeight := 0;
 end;
@@ -115,8 +119,6 @@ procedure TFXRenderer.EnsureResources(Width, Height: Integer);
 var
   Properties: TD2D1RenderTargetProperties;
   Stroke: TD2D1StrokeStyleProperties;
-  Sink: ID2D1GeometrySink;
-  Bezier: TD2D1BezierSegment;
 begin
   if FFactory = nil then
   begin
@@ -126,22 +128,6 @@ begin
     Stroke := D2D1StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
       D2D1_CAP_STYLE_ROUND, D2D1_LINE_JOIN_ROUND);
     OleCheck(FFactory.CreateStrokeStyle(Stroke, nil, 0, FRoundStroke));
-    OleCheck(FFactory.CreatePathGeometry(FPetal));
-    OleCheck(FPetal.Open(Sink));
-    Sink.BeginFigure(D2D1PointF(0, -0.9), D2D1_FIGURE_BEGIN_FILLED);
-    Bezier.point1 := D2D1PointF(-1.25, -1.2); Bezier.point2 := D2D1PointF(-1.05, 0.6);
-    Bezier.point3 := D2D1PointF(0, 1.15); Sink.AddBezier(Bezier);
-    Bezier.point1 := D2D1PointF(1.05, 0.6); Bezier.point2 := D2D1PointF(1.25, -1.2);
-    Bezier.point3 := D2D1PointF(0, -0.9); Sink.AddBezier(Bezier);
-    Sink.EndFigure(D2D1_FIGURE_END_CLOSED); OleCheck(Sink.Close); Sink := nil;
-    OleCheck(FFactory.CreatePathGeometry(FLeaf));
-    OleCheck(FLeaf.Open(Sink));
-    Sink.BeginFigure(D2D1PointF(0, -1.3), D2D1_FIGURE_BEGIN_FILLED);
-    Bezier.point1 := D2D1PointF(-1.2, -0.4); Bezier.point2 := D2D1PointF(-0.7, 0.8);
-    Bezier.point3 := D2D1PointF(0, 1.3); Sink.AddBezier(Bezier);
-    Bezier.point1 := D2D1PointF(0.7, 0.8); Bezier.point2 := D2D1PointF(1.2, -0.4);
-    Bezier.point3 := D2D1PointF(0, -1.3); Sink.AddBezier(Bezier);
-    Sink.EndFigure(D2D1_FIGURE_END_CLOSED); OleCheck(Sink.Close);
   end;
   if (FTarget <> nil) and (Width = FWidth) and (Height = FHeight) then Exit;
   ResetTarget;
@@ -183,7 +169,7 @@ begin
     ((Color shr 8) and 255) / 255, (Color and 255) / 255, EnsureRange(Opacity, 0.0, 1.0)));
 end;
 
-procedure TFXRenderer.DrawVisual(const V: TFXVisual; const S: TFXSettings);
+procedure TFXRenderer.DrawVisual(const V: TFXVisual; const S: TFXSettings; Accumulated: Boolean);
 var
   Matrix: TD2D1Matrix3x2F;
   Radius, CS, SN, Flip, Speed, Trail, DX, DY: Single;
@@ -237,12 +223,13 @@ begin
       Matrix._31 := V.Position.X; Matrix._32 := V.Position.Y;
       FTarget.SetTransform(Matrix);
       case V.Shape of
-        shPetal: FTarget.FillGeometry(FPetal, FBrush);
-        shLeaf: FTarget.FillGeometry(FLeaf, FBrush);
-        shPaper: FTarget.FillRectangle(D2D1RectF(-0.6, -1, 0.6, 1), FBrush);
+        shPetal, shLeaf: FSprites.Draw(FTarget, FWicFactory, V, S, Accumulated);
+        shPaper: begin
+          FTarget.FillRectangle(D2D1RectF(-0.6, -1, 0.6, 1), FBrush);
+          SetColor($FFFFFF, V.Opacity * 0.25);
+          FTarget.DrawLine(D2D1PointF(0, -0.6), D2D1PointF(0, 0.8), FBrush, 0.09);
+        end;
       end;
-      SetColor($FFFFFF, V.Opacity * 0.25);
-      FTarget.DrawLine(D2D1PointF(0, -0.6), D2D1PointF(0, 0.8), FBrush, 0.09);
       FTarget.SetTransform(TD2D1Matrix3x2F.Identity);
     end;
     shGrain, shHail, shLight, shInk: begin
@@ -328,14 +315,18 @@ var
   Depth, Across, BaseOpacity: Double;
 begin
   if FEnvironment.SurfaceCount = 0 then Exit;
-  BuildAccumulation;
-  FTarget.SetTransform(TD2D1Matrix3x2F.Identity);
-  BaseOpacity := S.AccumOpacity;
-  if S.Style in [fsPetal, fsLeaf, fsConfetti] then BaseOpacity := BaseOpacity * 0.55;
-  SetColor(S.AccumColor, BaseOpacity);
-  FTarget.FillGeometry(FAccumulation, FBrush);
-  SetColor($FFFFFF, BaseOpacity * 0.4);
-  FTarget.DrawGeometry(FAccumEdge, FBrush, 1.2, FRoundStroke);
+  // 花びら・葉は色の帯で埋めず、同じPNGの重なりで蓄積を表す。
+  if not (S.Shape in [shPetal, shLeaf]) then
+  begin
+    BuildAccumulation;
+    FTarget.SetTransform(TD2D1Matrix3x2F.Identity);
+    BaseOpacity := S.AccumOpacity;
+    if S.Style = fsConfetti then BaseOpacity := BaseOpacity * 0.55;
+    SetColor(S.AccumColor, BaseOpacity);
+    FTarget.FillGeometry(FAccumulation, FBrush);
+    SetColor($FFFFFF, BaseOpacity * 0.4);
+    FTarget.DrawGeometry(FAccumEdge, FBrush, 1.2, FRoundStroke);
+  end;
   if not (S.Style in [fsPetal, fsLeaf, fsConfetti, fsSand, fsHail]) then Exit;
   // 蓄積量は履歴ではなく、固定した素材片の位置・数へ反映する。
   MaterialSettings := S; MaterialSettings.Glow := 0; MaterialSettings.MotionBlur := 0;
@@ -361,7 +352,7 @@ begin
         V.Opacity := S.AccumOpacity * (0.6 + FXRandom(ID, S.Seed, 154) * 0.4);
         V.Angle := FXRandom(ID, S.Seed, 155) * 2 * Pi;
         V.Aspect := S.Aspect; V.Shape := S.Shape;
-        DrawVisual(V, MaterialSettings);
+        DrawVisual(V, MaterialSettings, True);
       end;
     end;
     Inc(I, 3);

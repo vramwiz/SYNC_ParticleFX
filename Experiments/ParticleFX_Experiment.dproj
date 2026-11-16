@@ -24,10 +24,15 @@
     <ItemGroup>
         <DelphiCompile Include="$(MainSource)"><MainSource>MainSource</MainSource></DelphiCompile>
         <DCCReference Include="..\Source\Common\ParticleFX_Types.pas"/>
+        <DCCReference Include="..\Source\Common\ParticleFX_Motion.pas"/>
         <DCCReference Include="..\Source\Common\ParticleFX_Collision.pas"/>
         <DCCReference Include="..\Source\Common\ParticleFX_Simulation.pas"/>
         <DCCReference Include="..\Source\Common\ParticleFX_Viscous.pas"/>
+        <DCCReference Include="..\Source\Common\ParticleFX_Sprites.pas"/>
         <DCCReference Include="..\Source\Common\ParticleFX_Renderer.pas"/>
+        <DCCReference Include="ParticleFX_SpriteChecks.pas"/>
+        <DCCReference Include="ParticleFX_DanceChecks.pas"/>
+        <DCCReference Include="ParticleFX_QuantityChecks.pas"/>
     </ItemGroup>
     <Import Project="$(BDS)\Bin\CodeGear.Delphi.Targets"/>
 </Project>

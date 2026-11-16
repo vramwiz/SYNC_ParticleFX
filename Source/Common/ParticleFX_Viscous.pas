@@ -11,7 +11,7 @@ interface
 
 uses
   System.Generics.Collections, ParticleFX_Types, ParticleFX_Collision,
-  ParticleFX_Simulation;
+  ParticleFX_Simulation, ParticleFX_Motion;
 
 const
   FX_MAX_VISCOUS_PARTICLES = 2048;
@@ -21,6 +21,7 @@ type
   TFXFlowParticle = record
     Particle: TFXParticle;
     Position, Velocity, Normal: TFXVec;
+    Glide: TFXGlideState;
     Phase: TFXFlowPhase;
     ContactTime, FrontTime: Double;
     Contact, EnteredImage: Boolean;
@@ -35,6 +36,7 @@ type
     FFactory: TFXSimulator; // 借用。共通の初期粒子生成だけを利用する。
     FParticles: TArray<TFXFlowParticle>;
     FVelocity: TArray<TFXVec>;
+    FGlideStates: TArray<TFXGlideState>;
     FHeads, FNext: TArray<Integer>;
     FCheckpoints: TList<TFXFlowSnapshot>;
     FSettings: TFXSettings;
@@ -72,6 +74,7 @@ begin
   FFactory := Factory;
   SetLength(FParticles, FX_MAX_VISCOUS_PARTICLES);
   SetLength(FVelocity, FX_MAX_VISCOUS_PARTICLES);
+  SetLength(FGlideStates, FX_MAX_VISCOUS_PARTICLES);
   SetLength(FNext, FX_MAX_VISCOUS_PARTICLES);
   FCheckpoints := TList<TFXFlowSnapshot>.Create;
 end;
@@ -178,7 +181,7 @@ var
   I, J, K, X, Y, CX, CY, GW, GH, CellIndex: Integer;
   Cell, Radius, Dist, Weight, Sum, Desired, Force, DT, Speed, Dot, Fraction,
     Hold, Amount, Gust, Wave, Blend: Double;
-  G, Wind, Delta, Mean, Pull, V, Next, Hit, N, Tangent, Accel, Supported: TFXVec;
+  G, Wind, Delta, Mean, Pull, V, Next, Hit, N, Tangent, Accel, Supported, PreviousVelocity: TFXVec;
   P: TFXFlowParticle;
 begin
   K := 0;
@@ -251,8 +254,14 @@ begin
       Wave := DegToRad(S.Vortex) * DT;
       V := FXVec(V.X * Cos(Wave) - V.Y * Sin(Wave), V.X * Sin(Wave) + V.Y * Cos(Wave));
     end;
+    if (S.GlideStrength > 0) and (P.Phase = fpAir) then
+      FXTurnGlide(P.Particle.ID, P.Particle.Depth, DT, S, P.Glide, V);
+    FGlideStates[I] := P.Glide;
     Speed := FXLength(V);
-    if Speed > S.MaxSpeed then V := FXVec(V.X * S.MaxSpeed / Speed, V.Y * S.MaxSpeed / Speed);
+    if Speed > S.MaxSpeed then
+    begin
+      V := FXVec(V.X * S.MaxSpeed / Speed, V.Y * S.MaxSpeed / Speed);
+    end;
     FVelocity[I] := V;
   end;
   Amount := 0;
@@ -262,7 +271,8 @@ begin
   for I := 0 to FCount - 1 do
   begin
     P := FParticles[I]; DT := Max(0.0, B - Max(A, P.Particle.Birth));
-    P.Velocity := FVelocity[I];
+    PreviousVelocity := P.Velocity;
+    P.Velocity := FVelocity[I]; P.Glide := FGlideStates[I];
     if P.Phase = fpSurface then
     begin
       Tangent := FXVec(-P.Normal.Y, P.Normal.X);
@@ -288,12 +298,16 @@ begin
         else begin P.Phase := fpAir; P.Position := Next; end;
       end else begin P.Phase := fpAir; P.Position := Next; end;
     end else begin
-      Next := FXVec(P.Position.X + P.Velocity.X * DT, P.Position.Y + P.Velocity.Y * DT);
+      if (S.GlideStrength > 0) and (P.Phase = fpAir) then
+        Next := FXVec(P.Position.X + (PreviousVelocity.X + P.Velocity.X) * 0.5 * DT,
+          P.Position.Y + (PreviousVelocity.Y + P.Velocity.Y) * 0.5 * DT)
+      else Next := FXVec(P.Position.X + P.Velocity.X * DT, P.Position.Y + P.Velocity.Y * DT);
       if (P.Phase = fpAir) and S.Collision and
         Environment.Trace(P.Position, Next, P.Particle.Size * 0.65, Hit, N, Fraction, True) then
       begin
         P.Position := FXVec(Hit.X + N.X * 0.7, Hit.Y + N.Y * 0.7);
         P.Normal := N; P.Phase := fpSurface; P.Contact := True; P.ContactTime := B;
+        P.Glide := Default(TFXGlideState);
         if S.Response = 1 then
         begin
           Dot := FXDot(P.Velocity, N);

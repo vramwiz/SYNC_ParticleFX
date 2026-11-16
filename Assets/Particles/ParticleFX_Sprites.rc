@@ -1,0 +1,3 @@
+// Build-time PNG resources; the renderer never creates files at runtime.
+PFX_SAKURA_PETAL RCDATA "sakura_petal.png"
+PFX_AUTUMN_LEAF RCDATA "autumn_leaf.png"

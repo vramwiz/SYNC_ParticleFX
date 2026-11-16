@@ -23,14 +23,17 @@ type
   TFXEmission = (feContinuous, feShot, feExplosion, feJet, feSpray);
   TFXMaterial = (fmWater, fmSnow, fmSand, fmPetal, fmLeaf, fmConfetti,
     fmHail, fmLight, fmInk, fmSlime);
-  TFXMotion = (fxmNormal, fxmWind, fxmStorm, fxmVortex, fxmWeightless);
+  // 動きの既存IDは保持し、新しい選択肢だけを末尾へ追加する。
+  TFXMotion = (fxmNormal, fxmWind, fxmStorm, fxmVortex, fxmWeightless,
+    fxmFlutter, fxmDance);
 
 const
   FX_MATERIAL_NAMES: array[TFXMaterial] of PWideChar = ('水', '雪', '砂',
     '花びら', '落ち葉', '紙吹雪', 'ひょう', '光', 'インク', 'スライム');
   FX_SOURCE_NAMES: array[0..4] of PWideChar = ('広範囲', '一斉発射', '連続噴出', '爆発', '連続噴射');
   FX_SOURCE_VALUES: array[0..4] of TFXEmission = (feContinuous, feShot, feJet, feExplosion, feSpray);
-  FX_MOTION_NAMES: array[TFXMotion] of PWideChar = ('通常', '横風', '強風', '渦', '無重力');
+  FX_MOTION_NAMES: array[TFXMotion] of PWideChar = ('通常', '横風', '強風', '渦', '無重力',
+    'ヒラヒラ', '舞う');
 
 type
   TFXShape = (shDrop, shSnow, shPetal, shLeaf, shPaper, shGrain,
@@ -73,6 +76,7 @@ type
     Viscosity, Cohesion, Adhesion, DripTime: Double;
     BottomMargin: Integer;
     InitialState: Double;
+    GlideStrength, GlideRadius, StallSpeed: Double;
   end;
 
   TFXStartupTiming = record
@@ -288,6 +292,7 @@ begin
   Result.Viscosity := 0.7; Result.Cohesion := 0.75;
   Result.Adhesion := 0.8; Result.DripTime := 1.2;
   Result.InitialState := 100;
+  Result.GlideRadius := 90; Result.StallSpeed := 45;
 end;
 
 function FXComposeSettings(Material: TFXMaterial; Emission: TFXEmission;
@@ -375,6 +380,21 @@ begin
     fxmWeightless: begin
       Result.Gravity := 0; Result.Drag := 0; Result.Sway := 0;
     end;
+    fxmFlutter: begin
+      Result.Sway := Max(30.0, Result.Sway);
+      if (Emission = feContinuous) and (Material in [fmPetal, fmLeaf]) then
+        Result.Rate := Result.Rate * 0.15;
+    end;
+    fxmDance: begin
+      Result.GlideStrength := 1; Result.GlideRadius := 90; Result.StallSpeed := 45;
+      Result.Gravity := 90; Result.Drag := 0.15; Result.Sway := 0;
+      // 長い滞空時間に毎秒の発生量を合わせ、設定直後から画面を埋めないようにする。
+      // 基準プロファイルと保存済みの発生量は変えず、設定ボタンでだけ反映する。
+      if (Emission = feContinuous) and (Material in [fmPetal, fmLeaf]) then
+        Result.Rate := Result.Rate * 0.05;
+      // 上から入り、滑空で一時的に戻りながら全体として落下する。
+      // 発射・噴出の向きと初速は従来の発生条件を維持する。
+    end;
   end;
 end;
 
@@ -397,8 +417,14 @@ begin
       MinimumSpeed := Min(S.MaxSpeed, Max(5.0, S.Speed *
         (1 - S.Depth * 0.65) * (1 - S.SpeedVariation * 0.5)));
       MinimumSpeed := MinimumSpeed / (1 + S.Drag * 2);
+      if S.GlideStrength > 0 then
+        // 滑空の下降は遅いので、初速だけから寿命や予備動作を短く見積もらない。
+        MinimumSpeed := Min(S.MaxSpeed, Max(4.0, Sqrt(Max(0.0, S.Gravity) *
+          Max(20.0, S.GlideRadius)) * (0.06 + S.Drag * 0.8) * (1 - S.Depth * 0.65)));
       Acceleration := Max(0.0, FXDot(FXDirection(S.GravityAngle), D) * S.Gravity +
         FXDot(FXDirection(S.WindAngle), D) * S.Wind);
+      // 滑空では重力が弧の上下へ変換されるため、自由落下の到達時間を使わない。
+      if S.GlideStrength > 0 then Acceleration := 0;
       if Acceleration > 0.01 then
       begin
         ToLimit := Max(0.0, (S.MaxSpeed - MinimumSpeed) / Acceleration);
@@ -406,7 +432,8 @@ begin
         if Distance > LimitDistance then TravelTime := ToLimit + (Distance - LimitDistance) / S.MaxSpeed
         else TravelTime := 2 * Distance / (Sqrt(Sqr(MinimumSpeed) + 2 * Acceleration * Distance) + MinimumSpeed);
       end else TravelTime := Distance / MinimumSpeed;
-      TravelTime := Min(30.0, TravelTime * 1.2);
+      if S.GlideStrength > 0 then TravelTime := Min(90.0, TravelTime * 1.2)
+      else TravelTime := Min(30.0, TravelTime * 1.2);
       if S.AutomaticLifetime then Result.ParticleLifetime := Max(Result.ParticleLifetime, TravelTime);
       Automatic := Min(Result.ParticleLifetime * 1.16, TravelTime);
     end;

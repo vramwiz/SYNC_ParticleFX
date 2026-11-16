@@ -9,7 +9,7 @@
 interface
 
 uses
-  System.Generics.Collections, ParticleFX_Types, ParticleFX_Collision;
+  System.Generics.Collections, ParticleFX_Types, ParticleFX_Collision, ParticleFX_Motion;
 
 type
   TFXParticle = record
@@ -21,6 +21,7 @@ type
 
   TFXCacheEntry = record
     Position, Velocity, HitPosition, HitVelocity, Normal: TFXVec;
+    Glide: TFXGlideState;
     Step: Integer;
     Hit: Boolean;
     HitTime: Double;
@@ -49,6 +50,8 @@ type
     // 逆再生・キャッシュなし・同一時刻の再計算でも同じ固定刻みを使用する。
     procedure Generate(Time: Double; const Settings: TFXSettings;
       Environment: TFXEnvironment; Output: TFXVisualList);
+    // 診断用に整数刻みの状態を値で返す。描画範囲外でも追跡でき、履歴は変更しない。
+    function SnapshotParticle(ID: Int64; out State: TFXCacheEntry): Boolean;
     property SimulatedSteps: Integer read FSimulatedSteps;
     property CollisionCount: Integer read FCollisionCount;
   end;
@@ -71,6 +74,12 @@ destructor TFXSimulator.Destroy;
 begin
   FCache.Free;
   inherited;
+end;
+
+function TFXSimulator.SnapshotParticle(ID: Int64; out State: TFXCacheEntry): Boolean;
+begin
+  Result := FCache.TryGetValue(ID, State);
+  if not Result then State := Default(TFXCacheEntry);
 end;
 
 function TFXSimulator.NewParticle(ID: Int64; Birth, Lifetime: Double; const S: TFXSettings;
@@ -126,10 +135,11 @@ end;
 procedure TFXSimulator.Advance(var State: TFXCacheEntry; const P: TFXParticle;
   const S: TFXSettings; Environment: TFXEnvironment; Age, DT: Double);
 var
-  Gravity, Wind, Accel, Next, Hit, Normal: TFXVec;
+  Gravity, Wind, Accel, Next, Hit, Normal, PreviousVelocity: TFXVec;
   Gust, AbsoluteTime, Wave, Omega, Speed, Rotation, CS, SN, VX, Fraction: Double;
 begin
   if State.Hit or (DT <= 0) then Exit;
+  PreviousVelocity := State.Velocity;
   Gravity := FXDirection(S.GravityAngle);
   Wind := FXDirection(S.WindAngle);
   AbsoluteTime := P.Birth + Age;
@@ -161,13 +171,18 @@ begin
     State.Velocity.X := VX * CS - State.Velocity.Y * SN;
     State.Velocity.Y := VX * SN + State.Velocity.Y * CS;
   end;
+  if S.GlideStrength > 0 then
+    FXTurnGlide(P.ID, P.Depth, DT, S, State.Glide, State.Velocity);
   Speed := FXLength(State.Velocity);
   if Speed > S.MaxSpeed then
   begin
     State.Velocity.X := State.Velocity.X * S.MaxSpeed / Speed;
     State.Velocity.Y := State.Velocity.Y * S.MaxSpeed / Speed;
   end;
-  Next := FXVec(State.Position.X + State.Velocity.X * DT,
+  if S.GlideStrength > 0 then
+    Next := FXVec(State.Position.X + (PreviousVelocity.X + State.Velocity.X) * 0.5 * DT,
+      State.Position.Y + (PreviousVelocity.Y + State.Velocity.Y) * 0.5 * DT)
+  else Next := FXVec(State.Position.X + State.Velocity.X * DT,
     State.Position.Y + State.Velocity.Y * DT);
   if S.Collision and Environment.Trace(State.Position, Next, P.Size * 0.65,
     Hit, Normal, Fraction) then
@@ -209,8 +224,14 @@ var
         if not AllowBounce then Exit(False);
         Position := FXVec(Hit.X + HitNormal.X * 1.1, Hit.Y + HitNormal.Y * 1.1);
         Dot := FXDot(Velocity, HitNormal);
-        Velocity := FXVec((Velocity.X - 2 * Dot * HitNormal.X) * S.Bounce * 0.7,
-          (Velocity.Y - 2 * Dot * HitNormal.Y) * S.Bounce * 0.7);
+        if Response = 5 then
+        begin
+          // 素材片の滑落では面へ入る成分だけを除き、上向きの反射を作らない。
+          if Dot < 0 then Velocity := FXVec(Velocity.X - Dot * HitNormal.X,
+            Velocity.Y - Dot * HitNormal.Y);
+        end else
+          Velocity := FXVec((Velocity.X - 2 * Dot * HitNormal.X) * S.Bounce * 0.7,
+            (Velocity.Y - 2 * Dot * HitNormal.Y) * S.Bounce * 0.7);
         Inc(Bounces);
         if (Bounces >= 3) or (FXLength(Velocity) < 8) then Break;
       end else Position := Next;
@@ -248,7 +269,8 @@ begin
     if Response = 5 then
     begin
       Dot := FXDot(Gravity, Tangent) * S.Slide * 80;
-      Reflected := FXVec(Tangent.X * Dot + N.X * 15, Tangent.Y * Dot + N.Y * 15);
+      // 輪郭の外への位置補正は済んでいる。外向きの初速を足すと上面から浮き上がる。
+      Reflected := FXVec(Tangent.X * Dot, Tangent.Y * Dot);
     end;
     if (T <= Life) and Flight(V.Position, Reflected, P.Size * 0.65, True,
       V.Position, V.Velocity) then Output.Add(V);
@@ -330,6 +352,7 @@ begin
   V := Default(TFXVisual);
   V.Position := RenderState.Position; V.Velocity := RenderState.Velocity;
   V.Size := P.Size; V.Angle := P.Phase + DegToRad(P.Spin * Age);
+  if S.GlideStrength > 0 then V.Angle := RenderState.Glide.Angle;
   V.Opacity := S.Opacity * Fade * Min(1.0, Age / 0.04);
   V.Aspect := S.Aspect; V.Color := P.Color; V.Shape := S.Shape;
   Output.Add(V);
@@ -381,7 +404,7 @@ begin
     end;
     Exit;
   end;
-  Rate := Max(0.01, Settings.Rate);
+  Rate := Settings.Rate;
   if (Settings.StartTime > 0) and (Time < Settings.StartTime) then Exit;
   Earliest := Settings.StartTime - Timing.Prewarm;
   if Time < Earliest then Exit;

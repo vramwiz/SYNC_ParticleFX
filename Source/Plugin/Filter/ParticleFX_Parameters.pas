@@ -30,7 +30,7 @@ type
     trOpacity, trThreshold, trBounce, trSplash, trSplashSpeed, trContactLife,
     trSlide, trAccumAmount, trThickness, trRoughness, trSlope, trAccumOpacity,
     trMelt, trFloor, trBlur, trMotionBlur, trGlow, trDepth, trWidth, trHeight,
-    trPrewarm, trViscosity, trCohesion, trAdhesion, trDripTime, trMargin, trInitialState);
+    trPrewarm, trViscosity, trCohesion, trAdhesion, trDripTime, trMargin, trInitialState, trGlide, trGlideRadius, trStallSpeed);
   TSelect = (slStyle, slMaterial, slSource, slMotion, slEmission, slResponse, slAccumShape, slDrawMode);
   TCheck = (ckCollision, ckAccumulation, ckFloor, ckColor, ckAccumColor, ckAutoEmitter);
 
@@ -44,8 +44,8 @@ var
   SettingsButton: TFILTER_ITEM_BUTTON;
 
 // SDKの編集セクションで全項目を更新する。選択だけでは現在の設定へ影響しない。
-procedure ApplySettingsButton(Edit: PEDIT_SECTION; Obj: OBJECT_HANDLE;
-  Effect, Item: PWideChar); cdecl;
+procedure WriteParticleFXSettings(Edit: PEDIT_SECTION; Obj: OBJECT_HANDLE;
+  Effect: PWideChar; const Values: TFXSettings);
 var
   Base, Preset: TFXSettings;
   Amount: Double;
@@ -95,10 +95,7 @@ begin
   try
     // callback2の対象名をそのまま使い、同じフィルターの2個目以降も区別する。
     TargetEffect := Effect;
-    Preset := FXComposeSettings(
-      TFXMaterial(EnsureRange(Selects[slMaterial].Value, Ord(Low(TFXMaterial)), Ord(High(TFXMaterial)))),
-      TFXEmission(EnsureRange(Selects[slSource].Value, Ord(Low(TFXEmission)), Ord(High(TFXEmission)))),
-      TFXMotion(EnsureRange(Selects[slMotion].Value, Ord(Low(TFXMotion)), Ord(High(TFXMotion)))));
+    Preset := Values;
     Base := FXDefaultSettings(Preset.Style);
     // 素材の基準も切り替えてから倍率を設定し、雪の数値を雨へ掛けない。
     SetSelect(slStyle, Ord(Preset.Style));
@@ -140,6 +137,9 @@ begin
     if Base.Sway > 0 then SetTrack(trSway, Preset.Sway / Base.Sway * 100)
     else SetTrack(trSway, 100);
     SetTrack(trSwaySpeed, Preset.SwaySpeed);
+    SetTrack(trGlide, Preset.GlideStrength * 100);
+    SetTrack(trGlideRadius, Preset.GlideRadius);
+    SetTrack(trStallSpeed, Preset.StallSpeed);
     SetTrack(trGlow, (Preset.Glow - Base.Glow) * 100);
     SetTrack(trViscosity, Preset.Viscosity * 100);
     SetTrack(trCohesion, Preset.Cohesion * 100);
@@ -150,6 +150,18 @@ begin
     on E: Exception do
       OutputDebugString(PWideChar('SYNC_ParticleFX settings: ' + E.Message));
   end;
+end;
+
+// 選択だけでは描画を変えず、押したエフェクトの標準項目へ一度だけ設定する。
+procedure ApplySettingsButton(Edit: PEDIT_SECTION; Obj: OBJECT_HANDLE;
+  Effect, Item: PWideChar); cdecl;
+var Values: TFXSettings;
+begin
+  Values := FXComposeSettings(
+    TFXMaterial(EnsureRange(Selects[slMaterial].Value, Ord(Low(TFXMaterial)), Ord(High(TFXMaterial)))),
+    TFXEmission(EnsureRange(Selects[slSource].Value, Ord(Low(TFXEmission)), Ord(High(TFXEmission)))),
+    TFXMotion(EnsureRange(Selects[slMotion].Value, Ord(Low(TFXMotion)), Ord(High(TFXMotion)))));
+  WriteParticleFXSettings(Edit, Obj, Effect, Values);
 end;
 
 procedure Track(Item: TTrack; Name: PWideChar; Value, Low, High: Double;
@@ -185,7 +197,7 @@ begin
   AddButton(SettingsButton, '設定', ApplySettingsButton);
   Select(slStyle, 'スタイル', ['雨', '雪', '水をかける', '花びら', '落ち葉',
     '紙吹雪', '砂', 'ひょう', '噴水', '光の粒', 'インク', 'スライム']);
-  Track(trAmount, '発生量', 100, 0, 1000);
+  Track(trAmount, '発生量', 100, 0, 1000, 0.1);
   Track(trSize, 'サイズ', 100, 1, 1000);
   Track(trSpeed, '初速度', 100, 0, 1000);
   Track(trSeed, 'シード', 1, 0, 1000000);
@@ -222,6 +234,9 @@ begin
   Track(trMaxSpeed, '最大速度', 2400, 1, 10000);
   Track(trSway, '揺れ幅', 100, 0, 500);
   Track(trSwaySpeed, '揺れ速度', 1, 0, 10, 0.1);
+  Track(trGlide, '舞う強さ', 0, 0, 200);
+  Track(trGlideRadius, '旋回幅', 90, 20, 400);
+  Track(trStallSpeed, '失速速度', 45, 5, 200);
   AddGroup(GroupEnds[1], '', 1);
 
   AddGroup(Groups[2], '外観', 0);
@@ -355,6 +370,8 @@ begin
   Result.Viscosity := Value(trViscosity) / 100; Result.Cohesion := Value(trCohesion) / 100;
   Result.Adhesion := Value(trAdhesion) / 100; Result.DripTime := Value(trDripTime);
   Result.BottomMargin := Round(Value(trMargin));
+  Result.GlideStrength := Value(trGlide) / 100;
+  Result.GlideRadius := Value(trGlideRadius); Result.StallSpeed := Value(trStallSpeed);
 end;
 
 end.

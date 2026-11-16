@@ -12,10 +12,15 @@ uses
   System.Generics.Collections,
   Winapi.Windows, Winapi.ActiveX, Vcl.Graphics, Vcl.Imaging.pngimage, Vcl.Imaging.GIFImg,
   ParticleFX_Types in '..\Source\Common\ParticleFX_Types.pas',
+  ParticleFX_Motion in '..\Source\Common\ParticleFX_Motion.pas',
   ParticleFX_Collision in '..\Source\Common\ParticleFX_Collision.pas',
   ParticleFX_Simulation in '..\Source\Common\ParticleFX_Simulation.pas',
   ParticleFX_Viscous in '..\Source\Common\ParticleFX_Viscous.pas',
-  ParticleFX_Renderer in '..\Source\Common\ParticleFX_Renderer.pas';
+  ParticleFX_Sprites in '..\Source\Common\ParticleFX_Sprites.pas',
+  ParticleFX_Renderer in '..\Source\Common\ParticleFX_Renderer.pas',
+  ParticleFX_SpriteChecks in 'ParticleFX_SpriteChecks.pas',
+  ParticleFX_DanceChecks in 'ParticleFX_DanceChecks.pas',
+  ParticleFX_QuantityChecks in 'ParticleFX_QuantityChecks.pas';
 
 const
   WIDTH = 960;
@@ -1580,6 +1585,11 @@ begin
   SlimeChecks;
   SlimeMotionChecks;
   StartupStateChecks;
+  RunSpriteChecks(OutputDir, Check, SavePNG,
+    (ParamCount >= 2) and SameText(ParamStr(2), 'animation'));
+  RunDanceChecks(OutputDir, Check, SavePNG,
+    (ParamCount >= 2) and SameText(ParamStr(2), 'animation'));
+  RunQuantityChecks(Check, SavePNG);
   if (ParamCount >= 2) and SameText(ParamStr(2), 'animation') then CreateMotionPreview;
 
   TFile.WriteAllText(TPath.Combine(OutputDir, 'checks.txt'),

@@ -1,13 +1,14 @@
-﻿param([string]$PreviewDirectory, [switch]$StartupOnly, [switch]$CompositionOnly, [switch]$VisibilityOnly)
+﻿param([string]$PreviewDirectory, [switch]$StartupOnly, [switch]$CompositionOnly, [switch]$VisibilityOnly, [switch]$SpriteOnly, [switch]$DensityOnly)
 
 # 実験出力の透過PNGを市松模様へ重ね、目視確認用の一覧を作る。
 $ErrorActionPreference = 'Stop'
-if (($StartupOnly -and $CompositionOnly) -or ($StartupOnly -and $VisibilityOnly) -or
-    ($CompositionOnly -and $VisibilityOnly)) { throw 'Choose one sheet type at a time.' }
+if (@(@($StartupOnly, $CompositionOnly, $VisibilityOnly, $SpriteOnly, $DensityOnly) | Where-Object { $_ }).Count -gt 1) {
+    throw 'Choose one sheet type at a time.'
+}
 if (-not $PreviewDirectory) { $PreviewDirectory = Join-Path $PSScriptRoot '..\Win64\Experiment\Preview' }
 Add-Type -AssemblyName System.Drawing
 $files = @(Get-ChildItem -LiteralPath $PreviewDirectory -Filter '*.png' -File |
-    Where-Object Name -notin @('contact_sheet.png', 'startup_state.png', 'combinations.png', 'visibility.png') | Sort-Object Name)
+    Where-Object Name -notin @('contact_sheet.png', 'startup_state.png', 'combinations.png', 'visibility.png', 'illustrated_particles.png', 'startup_density.png') | Sort-Object Name)
 if ($StartupOnly) {
     $files = @(foreach ($kind in @('rain', 'snow', 'slime')) {
         foreach ($state in @(0, 50, 100)) {
@@ -29,6 +30,20 @@ if ($VisibilityOnly) {
         }
     })
 }
+if ($SpriteOnly) {
+    $files = @(foreach ($phase in @('closeup', 'falling')) {
+        foreach ($kind in @('petal', 'leaf')) {
+            Get-Item -LiteralPath (Join-Path $PreviewDirectory ('sprite_{0}_{1}.png' -f $kind, $phase))
+        }
+    })
+}
+if ($DensityOnly) {
+    $files = @(foreach ($motion in @('flutter', 'glide')) {
+        foreach ($version in @('before', 'after')) {
+            Get-Item -LiteralPath (Join-Path $PreviewDirectory ('density_petal_{0}_{1}.png' -f $motion, $version))
+        }
+    })
+}
 $tileWidth = 400
 $tileHeight = 225
 if ($StartupOnly -or $CompositionOnly) { $tileWidth = 320; $tileHeight = 180 }
@@ -36,6 +51,7 @@ $headerHeight = 28
 $gap = 12
 $columns = 3
 if ($VisibilityOnly) { $columns = 4; $tileWidth = 384; $tileHeight = 216 }
+if ($SpriteOnly -or $DensityOnly) { $columns = 2; $tileWidth = 480; $tileHeight = 270 }
 $rows = [int][Math]::Ceiling($files.Count / $columns)
 $sheet = [Drawing.Bitmap]::new($gap + $columns * ($tileWidth + $gap), $gap + $rows * ($tileHeight + $headerHeight + $gap))
 $graphics = [Drawing.Graphics]::FromImage($sheet)
@@ -56,13 +72,25 @@ try {
             }
         }
         $sourceImage = [Drawing.Image]::FromFile($files[$index].FullName)
-        try { $graphics.DrawImage($sourceImage, [int]$originX, [int]($originY + $headerHeight), $tileWidth, $tileHeight) }
+        try {
+            if ($SpriteOnly) {
+                $scale = [Math]::Min($tileWidth / $sourceImage.Width, $tileHeight / $sourceImage.Height)
+                $imageWidth = [int][Math]::Round($sourceImage.Width * $scale)
+                $imageHeight = [int][Math]::Round($sourceImage.Height * $scale)
+                $graphics.DrawImage($sourceImage, [int]($originX + ($tileWidth - $imageWidth) / 2),
+                    [int]($originY + $headerHeight + ($tileHeight - $imageHeight) / 2), $imageWidth, $imageHeight)
+            } else {
+                $graphics.DrawImage($sourceImage, [int]$originX, [int]($originY + $headerHeight), $tileWidth, $tileHeight)
+            }
+        }
         finally { $sourceImage.Dispose() }
     }
     $outputName = 'contact_sheet.png'
     if ($StartupOnly) { $outputName = 'startup_state.png' }
     if ($CompositionOnly) { $outputName = 'combinations.png' }
     if ($VisibilityOnly) { $outputName = 'visibility.png' }
+    if ($SpriteOnly) { $outputName = 'illustrated_particles.png' }
+    if ($DensityOnly) { $outputName = 'startup_density.png' }
     $outputPath = Join-Path $PreviewDirectory $outputName
     $sheet.Save($outputPath, [Drawing.Imaging.ImageFormat]::Png)
     Write-Output ([IO.Path]::GetFullPath($outputPath))
